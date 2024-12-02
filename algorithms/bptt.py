@@ -197,7 +197,7 @@ class BPTT:
                 if len(done_env_ids) > 0:
                     self.episode_loss_meter.update(self.episode_loss[done_env_ids])
                     self.episode_discounted_loss_meter.update(self.episode_discounted_loss[done_env_ids])
-                    self.episode_length_meter.update(self.episode_length[done_env_ids])
+                    self.episode_length_meter.update(self.episode_length[done_env_ids.to('cpu')])
                     for done_env_id in done_env_ids:
                         if (self.episode_loss[done_env_id] > 1e6 or self.episode_loss[done_env_id] < -1e6):
                             print('ep loss error')
