@@ -75,7 +75,7 @@ class SNUHumanoidEnv(DFlexEnv):
         #-----------------------
         # set up Usd renderer
         if (self.visualize):
-            self.stage = Usd.Stage.CreateNew("outputs/" + self.name + "HumanoidSNU_Low_" + str(self.num_envs) + ".usd")
+            self.stage = Usd.Stage.CreateNew("outputs/" + "HumanoidSNU_Low_" + str(self.num_envs) + ".usd")
 
             self.renderer = df.render.UsdRenderer(self.model, self.stage)
             self.renderer.draw_points = True

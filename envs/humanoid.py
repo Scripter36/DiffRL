@@ -353,7 +353,7 @@ class HumanoidEnv(DFlexEnv):
 
         self.rew_buf = progress_reward + up_reward + heading_reward + height_reward + torch.sum(self.actions ** 2, dim = -1) * self.action_penalty
 
-        # reset agents
+        # reset agents - 1 if object is below the termination height or the episode length is reached
         self.reset_buf = torch.where(self.obs_buf[:, 0] < self.termination_height, torch.ones_like(self.reset_buf), self.reset_buf)
         self.reset_buf = torch.where(self.progress_buf > self.episode_length - 1, torch.ones_like(self.reset_buf), self.reset_buf)
 
