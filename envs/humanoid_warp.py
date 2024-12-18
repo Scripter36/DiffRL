@@ -85,7 +85,7 @@ class HumanoidWarpEnv(WarpEnv):
         if self.visualize:
             self.stage = Usd.Stage.CreateNew("outputs/" + "HumanoidWarp_" + str(self.num_envs) + ".usd")
 
-            self.renderer = wp.sim.render.SimRendererUsd(self.model, self.stage, scaling=100.0)
+            self.renderer = wp.sim.render.SimRendererUsd(self.model, self.stage)
             # self.renderer.draw_points = True
             # self.renderer.draw_springs = True
             # self.renderer.draw_shapes = True
@@ -175,6 +175,7 @@ class HumanoidWarpEnv(WarpEnv):
 
         self.state = self.model.state()
         self.control = self.model.control()
+        wp.sim.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, None, self.state)
         self.tape = wp.Tape()
 
         num_act = int(len(self.control.joint_act) / self.num_environments)
@@ -220,16 +221,14 @@ class HumanoidWarpEnv(WarpEnv):
         #################################################
 
         self.actions = actions.clone()
-        joint_act = wp.to_torch(self.control.joint_act).view(self.num_envs, -1)
-        
-        joint_act[:, :] = actions * self.motor_scale * self.motor_strengths
-        actuation = self.control.joint_act
+        self.control.joint_act = wp.from_torch(actions * self.motor_scale * self.motor_strengths).reshape((-1,))
 
         for _ in range(self.sim_substeps):
-            self.control.joint_act = actuation
             out_state = self.model.state()
             wp.sim.collide(self.model, self.state)
             self.integrator.simulate(self.model, self.state, out_state, self.sim_dt / float(self.sim_substeps), self.control)
+            wp.sim.eval_ik(self.model, out_state, out_state.joint_q, out_state.joint_qd)
+
             self.state = out_state
 
         # df.SemiImplicitIntegrator().forward(self.model, self.state, self.sim_dt, self.sim_substeps, self.MM_caching_frequency)
@@ -314,6 +313,7 @@ class HumanoidWarpEnv(WarpEnv):
             self.state = self.model.state()
             self.state.joint_q = wp.clone(checkpoint['joint_q'], requires_grad = False)
             self.state.joint_qd = wp.clone(checkpoint['joint_qd'], requires_grad = False)
+            wp.sim.eval_fk(self.model, self.state.joint_q, self.state.joint_qd, None, self.state)
             self.actions = checkpoint['actions'].clone()
             self.progress_buf = checkpoint['progress_buf'].clone()
 
