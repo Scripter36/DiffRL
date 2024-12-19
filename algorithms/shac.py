@@ -419,7 +419,7 @@ class SHAC:
                 
                 # sanity check
                 if torch.isnan(self.grad_norm_before_clip) or self.grad_norm_before_clip > 1000000.:
-                    print('NaN gradient')
+                    print('NaN gradient. grad norm before clip = {:.2f}'.format(self.grad_norm_before_clip))
                     raise ValueError
 
             self.time_report.end_timer("compute actor loss")

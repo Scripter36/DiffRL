@@ -4,7 +4,7 @@
 conda env create -f diffrl_conda_upgrade.yml
 
 # Activate conda environment
-source activate shac
+conda activate shac
 
 # Install the package
 cd dflex

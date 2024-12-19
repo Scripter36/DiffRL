@@ -10,5 +10,6 @@ from envs.ant import AntEnv
 from envs.cheetah import CheetahEnv
 from envs.hopper import HopperEnv
 from envs.snu_humanoid import SNUHumanoidEnv
+from envs.snu_humanoid_full import SNUHumanoidFullEnv
 from envs.cartpole_swing_up import CartPoleSwingUpEnv
 from envs.humanoid import HumanoidEnv

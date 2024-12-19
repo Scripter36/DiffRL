@@ -502,7 +502,7 @@ class MuscleUnit:
 class Skeleton:
 
     def __init__(self, skeleton_file, muscle_file, builder, 
-        filter={}, 
+        filter=None,
         visualize_shapes=True, 
         stiffness=5.0, 
         damping=2.0, 
@@ -513,6 +513,9 @@ class Skeleton:
         limit_ke=1000.0,
         limit_kd=10.0,
         armature = 0.05):
+
+        if filter is None:
+            filter = {}
 
         self.armature = armature
         self.stiffness = stiffness
