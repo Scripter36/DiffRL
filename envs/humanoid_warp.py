@@ -52,9 +52,6 @@ class SimulateFunc(torch.autograd.Function):
         ctx.tape = wp.Tape()
         ctx.model = model
         ctx.control = control
-        # ctx.integrator = integrator
-        # ctx.dt = dt
-        # ctx.substeps = substeps
         ctx.body_q = state_in.body_q
         ctx.body_qd = state_in.body_qd
         ctx.joint_act = control.joint_act
@@ -77,14 +74,15 @@ class SimulateFunc(torch.autograd.Function):
         global g_state_out
         g_state_out = state_in
 
-        return wp.to_torch(state_in.body_q), wp.to_torch(state_in.body_qd), wp.to_torch(state_in.joint_q), wp.to_torch(state_in.joint_qd)
+        return wp.to_torch(state_in.body_q), wp.to_torch(state_in.body_qd), wp.to_torch(state_in.joint_q), wp.to_torch(
+            state_in.joint_qd)
 
     @staticmethod
     def backward(ctx, adj_body_q, adj_body_qd, adj_joint_q, adj_joint_qd):
         ctx.state.body_q.grad = wp.from_torch(adj_body_q, dtype=wp.transform)
         ctx.state.body_qd.grad = wp.from_torch(adj_body_qd, dtype=wp.spatial_vector)
-        ctx.state.joint_q.grad = wp.from_torch(adj_joint_q) # float32
-        ctx.state.joint_qd.grad = wp.from_torch(adj_joint_qd) # float32
+        ctx.state.joint_q.grad = wp.from_torch(adj_joint_q)  # float32
+        ctx.state.joint_qd.grad = wp.from_torch(adj_joint_qd)  # float32
 
         ctx.tape.backward()
 
@@ -93,6 +91,10 @@ class SimulateFunc(torch.autograd.Function):
 
 
 class HumanoidWarpEnv(WarpEnv):
+    body_q: torch.Tensor
+    body_qd: torch.Tensor
+    joint_q: torch.Tensor
+    joint_qd: torch.Tensor
 
     def __init__(self, render=False, device='cuda', num_envs=4096, seed=0, episode_length=1000, no_grad=True,
                  stochastic_init=False, MM_caching_frequency=1):
@@ -104,57 +106,9 @@ class HumanoidWarpEnv(WarpEnv):
 
         self.stochastic_init = stochastic_init
 
-        self.init_sim()
-
-        # other parameters
-        self.termination_height = 0.74
-        self.motor_strengths = [
-            200,
-            200,
-            200,
-            200,
-            200,
-            600,
-            400,
-            100,
-            100,
-            200,
-            200,
-            600,
-            400,
-            100,
-            100,
-            100,
-            100,
-            200,
-            100,
-            100,
-            200]
-
-        self.motor_scale = 0.35
-
-        self.motor_strengths = tu.to_torch(self.motor_strengths, dtype=torch.float, device=self.device,
-                                           requires_grad=False).repeat((self.num_envs, 1))
-
-        self.action_penalty = -0.002
-        self.joint_vel_obs_scaling = 0.1
-        self.termination_tolerance = 0.1
-        self.height_rew_scale = 10.0
-
         # -----------------------
-        # set up Usd renderer
-        if self.visualize:
-            self.stage = Usd.Stage.CreateNew("outputs/" + "HumanoidWarp_" + str(self.num_envs) + ".usd")
-
-            self.renderer = wp.sim.render.SimRendererUsd(self.model, self.stage)
-            # self.renderer.draw_points = True
-            # self.renderer.draw_springs = True
-            # self.renderer.draw_shapes = True
-            self.render_time = 0.0
-
-            self.render()
-
-    def init_sim(self):
+        # simulation init
+        # -----------------------
         self.builder = wp.sim.ModelBuilder()
 
         self.dt = 1.0 / 60.0
@@ -173,7 +127,7 @@ class HumanoidWarpEnv(WarpEnv):
         self.z_unit_tensor = tu.to_torch([0, 0, 1], dtype=torch.float, device=self.device, requires_grad=False).repeat(
             (self.num_envs, 1))
 
-        self.start_rot = wp.quat_from_axis_angle((1.0, 0.0, 0.0), -math.pi * 0.5)
+        self.start_rot = wp.quat_from_axis_angle(wp.vec3(1.0, 0.0, 0.0), -math.pi * 0.5)
         self.start_rotation = tu.to_torch(self.start_rot, device=self.device, requires_grad=False)
 
         # initialize some data used later on
@@ -243,16 +197,64 @@ class HumanoidWarpEnv(WarpEnv):
         wp.sim.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, None, self.state)
 
         # save body q, qd, joint q, qd as tensor for gradient computation
-        self.body_q = wp.to_torch(self.state.body_q)
-        self.body_qd = wp.to_torch(self.state.body_qd)
-        self.joint_q = wp.to_torch(self.state.joint_q)
-        self.joint_qd = wp.to_torch(self.state.joint_qd)
+        self.warp_state_to_torch()
 
         num_act = int(len(self.control.joint_act) / self.num_environments)
         print('num_act = ', num_act)
 
         if self.model.ground:
             wp.sim.collide(self.model, self.state)
+
+        # -----------------------
+        # other parameters
+        # -----------------------
+        self.termination_height = 0.74
+        self.motor_strengths = [
+            200,
+            200,
+            200,
+            200,
+            200,
+            600,
+            400,
+            100,
+            100,
+            200,
+            200,
+            600,
+            400,
+            100,
+            100,
+            100,
+            100,
+            200,
+            100,
+            100,
+            200]
+
+        self.motor_scale = 0.35
+
+        self.motor_strengths = tu.to_torch(self.motor_strengths, dtype=torch.float, device=self.device,
+                                           requires_grad=False).repeat((self.num_envs, 1))
+
+        self.action_penalty = -0.002
+        self.joint_vel_obs_scaling = 0.1
+        self.termination_tolerance = 0.1
+        self.height_rew_scale = 10.0
+
+        # -----------------------
+        # set up Usd renderer
+        # -----------------------
+        if self.visualize:
+            self.stage = Usd.Stage.CreateNew("outputs/" + "HumanoidWarp_" + str(self.num_envs) + ".usd")
+
+            self.renderer = wp.sim.render.SimRendererUsd(self.model, self.stage)
+            # self.renderer.draw_points = True
+            # self.renderer.draw_springs = True
+            # self.renderer.draw_shapes = True
+            self.render_time = 0.0
+
+            self.render()
 
     def render(self, mode='human'):
         if self.visualize:
@@ -278,7 +280,8 @@ class HumanoidWarpEnv(WarpEnv):
         #### an ugly fix for simulation nan values #### # reference: https://github.com/pytorch/pytorch/issues/15131
         def create_hook():
             def hook(grad):
-                torch.nan_to_num(grad, 0.0, 0.0, 0.0, out = grad)
+                torch.nan_to_num(grad, 0.0, 0.0, 0.0, out=grad)
+
             return hook
 
         if self.joint_q.requires_grad:
@@ -298,12 +301,16 @@ class HumanoidWarpEnv(WarpEnv):
 
         if self.no_grad:
             for _ in range(self.sim_substeps):
-                self.state = self.integrator.simulate(self.model, self.state, self.state, self.sim_dt / float(self.sim_substeps),
-                                         self.control)
+                self.state = self.integrator.simulate(self.model, self.state, self.state,
+                                                      self.sim_dt / float(self.sim_substeps),
+                                                      self.control)
             wp.sim.eval_ik(self.model, self.state, self.state.joint_q, self.state.joint_qd)
         else:
-            self.body_q, self.body_qd, self.joint_q, self.joint_qd = SimulateFunc.apply(self.model, self.state, self.control, self.integrator, self.sim_dt, self.sim_substeps,
-                                 self.body_q, self.body_qd, actions.view((-1)))
+            self.body_q, self.body_qd, self.joint_q, self.joint_qd = SimulateFunc.apply(self.model, self.state,
+                                                                                        self.control, self.integrator,
+                                                                                        self.sim_dt, self.sim_substeps,
+                                                                                        self.body_q, self.body_qd,
+                                                                                        actions.view((-1)))
             global g_state_out
             self.state = g_state_out
 
@@ -367,14 +374,11 @@ class HumanoidWarpEnv(WarpEnv):
                 joint_qd[env_ids, :] = 0.5 * (
                         torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
 
-            # turn on grad
-            self.state.joint_q = wp.from_torch(joint_q.view(-1), requires_grad=True)
-            self.state.joint_qd = wp.from_torch(joint_qd.view(-1), requires_grad=True)
+            # reset the states
+            self.state.joint_q.requires_grad = True
+            self.state.joint_qd.requires_grad = True
             wp.sim.eval_fk(self.model, self.state.joint_q, self.state.joint_qd, None, self.state)
-            self.joint_q = wp.to_torch(self.state.joint_q)
-            self.joint_qd = wp.to_torch(self.state.joint_qd)
-            self.body_q = wp.to_torch(self.state.body_q)
-            self.body_qd = wp.to_torch(self.state.body_qd)
+            self.warp_state_to_torch()
 
             # clear action
             self.actions = self.actions.clone()
@@ -395,8 +399,8 @@ class HumanoidWarpEnv(WarpEnv):
         with torch.no_grad():
             if checkpoint is None:
                 checkpoint = {}
-                checkpoint['joint_q'] = wp.clone(self.state.joint_q, requires_grad=False)
-                checkpoint['joint_qd'] = wp.clone(self.state.joint_qd, requires_grad=False)
+                checkpoint['joint_q'] = wp.clone(self.state.joint_q, requires_grad=True)
+                checkpoint['joint_qd'] = wp.clone(self.state.joint_qd, requires_grad=True)
                 checkpoint['actions'] = self.actions.clone()
                 checkpoint['progress_buf'] = self.progress_buf.clone()
 
@@ -404,32 +408,34 @@ class HumanoidWarpEnv(WarpEnv):
             self.state.joint_q = wp.clone(checkpoint['joint_q'], requires_grad=True)
             self.state.joint_qd = wp.clone(checkpoint['joint_qd'], requires_grad=True)
             wp.sim.eval_fk(self.model, self.state.joint_q, self.state.joint_qd, None, self.state)
-            self.joint_q = wp.to_torch(self.state.joint_q)
-            self.joint_qd = wp.to_torch(self.state.joint_qd)
-            self.body_q = wp.to_torch(self.state.body_q)
-            self.body_qd = wp.to_torch(self.state.body_qd)
+            self.warp_state_to_torch()
             self.actions = checkpoint['actions'].clone()
             self.progress_buf = checkpoint['progress_buf'].clone()
 
-    '''
-    This function starts collecting a new trajectory from the current states but cuts off the computation graph to the previous states.
-    It has to be called every time the algorithm starts an episode and it returns the observation vectors
-    '''
-
     def initialize_trajectory(self):
+        """
+        This function starts collecting a new trajectory from the current states but cuts off the computation graph to the previous states.
+        It has to be called every time the algorithm starts an episode and it returns the observation vectors
+        """
         self.clear_grad()
         self.calculateObservations()
 
         return self.obs_buf
 
-    def get_checkpoint(self):
-        checkpoint = {}
-        checkpoint['joint_q'] = self.joint_q.clone()
-        checkpoint['joint_qd'] = self.joint_qd.clone()
-        checkpoint['actions'] = self.actions.clone()
-        checkpoint['progress_buf'] = self.progress_buf.clone()
+    # def get_checkpoint(self):
+    #     checkpoint = {}
+    #     checkpoint['joint_q'] = self.joint_q.clone()
+    #     checkpoint['joint_qd'] = self.joint_qd.clone()
+    #     checkpoint['actions'] = self.actions.clone()
+    #     checkpoint['progress_buf'] = self.progress_buf.clone()
+    #
+    #     return checkpoint
 
-        return checkpoint
+    def warp_state_to_torch(self):
+        self.joint_q = wp.to_torch(self.state.joint_q)
+        self.joint_qd = wp.to_torch(self.state.joint_qd)
+        self.body_q = wp.to_torch(self.state.body_q)
+        self.body_qd = wp.to_torch(self.state.body_qd)
 
     def calculateObservations(self):
         joint_q = self.joint_q.view(self.num_envs, -1)
