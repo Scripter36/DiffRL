@@ -4,16 +4,11 @@
 conda env create -f diffrl_conda_upgrade.yml
 
 # Activate conda environment
-source activate shac
+source activate diffrl_warp
 
 # Install the package
-cd dflex
+cd externals/rl_games
 pip install -e .
-cd ../externals/rl_games
-pip install -e .
-
-# Link cuda
-ln -s $CONDA_PREFIX/lib $CONDA_PREFIX/lib64
 
 # go to examples
 cd ../../examples

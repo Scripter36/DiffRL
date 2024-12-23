@@ -20,7 +20,7 @@ import torch
 from tensorboardX import SummaryWriter
 import yaml
 
-import dflex as df
+# import dflex as df
 
 import envs
 import models.actor
