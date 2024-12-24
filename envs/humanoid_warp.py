@@ -5,7 +5,6 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-from envs.dflex_env import DFlexEnv
 import math
 import torch
 
@@ -16,7 +15,9 @@ from envs.warp_env import WarpEnv
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-import dflex as df
+import warp as wp
+import warp.sim
+import warp.sim.render
 
 import numpy as np
 np.set_printoptions(precision=5, linewidth=256, suppress=True)
@@ -26,8 +27,67 @@ try:
 except ModuleNotFoundError:
     print("No pxr package")
 
-from utils import load_utils as lu
 from utils import torch_utils as tu
+
+
+class SimulateFunc(torch.autograd.Function):
+    """PyTorch autograd function representing a simulation step.
+
+    Note:
+
+        This node will be inserted into the computation graph whenever
+        `forward()` is called on an integrator object. It should not be called
+        directly by the user.
+    """
+
+    @staticmethod
+    def forward(ctx, model: wp.sim.Model, state_in: wp.sim.State, control: wp.sim.Control,
+                integrator: wp.sim.SemiImplicitIntegrator, dt: float, substeps: int,
+                joint_q: torch.Tensor, joint_qd: torch.Tensor, joint_act: torch.Tensor):
+        # record launches
+        ctx.tape = wp.Tape()
+        ctx.model = model
+        ctx.control = control
+        ctx.joint_q = state_in.joint_q
+        ctx.joint_qd = state_in.joint_qd
+        ctx.joint_act = control.joint_act
+
+        # simulate
+        with ctx.tape:
+            for i in range(substeps):
+                # ensure actuation is set on all substeps
+                state_out = model.state(requires_grad=True)
+                integrator.simulate(model, state_in, state_out, dt / float(substeps), control)
+                # swap states
+                state_in = state_out
+            # inverse kinematics
+            wp.sim.eval_ik(model, state_in, state_in.joint_q, state_in.joint_qd)
+
+        # final state
+        ctx.state = state_in
+
+        # use global to pass state object back to caller
+        global g_state_out
+        g_state_out = state_in
+
+        return wp.to_torch(state_in.joint_q), wp.to_torch(state_in.joint_qd)
+
+    @staticmethod
+    def backward(ctx, adj_joint_q, adj_joint_qd):
+        ctx.state.joint_q.grad = wp.from_torch(adj_joint_q)  # float32
+        ctx.state.joint_qd.grad = wp.from_torch(adj_joint_qd)  # float32
+
+        ctx.tape.backward()
+
+        joint_q_grad = None if ctx.joint_q not in ctx.tape.gradients else torch.nan_to_num(wp.to_torch(ctx.tape.gradients[ctx.joint_q]), 0.0, 0.0, 0.0)
+        joint_qd_grad = None if ctx.joint_qd not in ctx.tape.gradients else torch.nan_to_num(wp.to_torch(ctx.tape.gradients[ctx.joint_qd]), 0.0, 0.0, 0.0)
+        joint_act_grad = None if ctx.joint_act not in ctx.tape.gradients else torch.nan_to_num(wp.to_torch(ctx.tape.gradients[ctx.joint_act]), 0.0, 0.0, 0.0)
+
+        print("joint_q_grad: ", joint_q_grad)
+        print("joint_qd_grad: ", joint_qd_grad)
+        print("joint_act_grad: ", joint_act_grad)
+
+        return None, None, None, None, None, None, joint_q_grad, joint_qd_grad, joint_act_grad
 
 
 class HumanoidWarpEnv(WarpEnv):
@@ -78,17 +138,57 @@ class HumanoidWarpEnv(WarpEnv):
 
         #-----------------------
         # set up Usd renderer
-        if (self.visualize):
+        if self.visualize:
             self.stage = Usd.Stage.CreateNew("outputs/" + "Humanoid_" + str(self.num_envs) + ".usd")
 
-            self.renderer = df.render.UsdRenderer(self.model, self.stage)
-            self.renderer.draw_points = True
-            self.renderer.draw_springs = True
-            self.renderer.draw_shapes = True
+            self.renderer = wp.sim.render.SimRendererUsd(self.model, self.stage)
+            # self.renderer.draw_points = True
+            # self.renderer.draw_springs = True
+            # self.renderer.draw_shapes = True
             self.render_time = 0.0
 
+    # -----------------------
+    # typings
+    # -----------------------
+
+    builder: wp.sim.ModelBuilder
+    dt: float
+    sim_substeps: int
+    sim_dt: float
+    ground: bool
+    num_joint_q: int
+    num_joint_qd: int
+    x_unit_tensor: torch.Tensor
+    y_unit_tensor: torch.Tensor
+    z_unit_tensor: torch.Tensor
+    start_rot: torch.Tensor
+    start_rotation: torch.Tensor
+    up_vec: torch.Tensor
+    heading_vec: torch.Tensor
+    inv_start_rot: torch.Tensor
+    basis_vec0: torch.Tensor
+    basis_vec1: torch.Tensor
+    targets: torch.Tensor
+    env_dist: float
+    start_joint_q: torch.Tensor
+    start_joint_target: torch.Tensor
+    start_pos: torch.Tensor
+    model: wp.sim.Model
+    integrator: wp.sim.SemiImplicitIntegrator
+    state: wp.sim.State
+    control: wp.sim.Control
+    sim_time: float
+    reset_buf: torch.Tensor
+    progress_buf: torch.Tensor
+    obs_buf: torch.Tensor
+    rew_buf: torch.Tensor
+    termination_buf: torch.Tensor
+    actions: torch.Tensor
+    joint_q: torch.Tensor
+    joint_qd: torch.Tensor
+
     def init_sim(self):
-        self.builder = df.sim.ModelBuilder()
+        self.builder = wp.sim.ModelBuilder()
 
         self.dt = 1.0/60.0
         self.sim_substeps = 48
@@ -103,7 +203,7 @@ class HumanoidWarpEnv(WarpEnv):
         self.y_unit_tensor = tu.to_torch([0, 1, 0], dtype=torch.float, device=self.device, requires_grad=False).repeat((self.num_envs, 1))
         self.z_unit_tensor = tu.to_torch([0, 0, 1], dtype=torch.float, device=self.device, requires_grad=False).repeat((self.num_envs, 1))
 
-        self.start_rot = df.quat_from_axis_angle((1.0, 0.0, 0.0), -math.pi*0.5)
+        self.start_rot = wp.quat_from_axis_angle(wp.vec3(1.0, 0.0, 0.0), -math.pi*0.5)
         self.start_rotation = tu.to_torch(self.start_rot, device=self.device, requires_grad=False)
 
         # initialize some data used later on
@@ -117,7 +217,7 @@ class HumanoidWarpEnv(WarpEnv):
 
         self.targets = tu.to_torch([200.0, 0.0, 0.0], device=self.device, requires_grad=False).repeat((self.num_envs, 1))
 
-        self.start_pos = []
+        start_pos = []
 
         if self.visualize:
             self.env_dist = 2.5
@@ -128,7 +228,7 @@ class HumanoidWarpEnv(WarpEnv):
 
         asset_folder = os.path.join(os.path.dirname(__file__), 'assets')
         for i in range(self.num_environments):
-            lu.parse_mjcf(os.path.join(asset_folder, "humanoid.xml"), self.builder,
+            wp.sim.parse_mjcf(os.path.join(asset_folder, "humanoid.xml"), self.builder,
                 stiffness=5.0,
                 damping=0.1,
                 contact_ke=2.e+4,
@@ -138,14 +238,13 @@ class HumanoidWarpEnv(WarpEnv):
                 limit_ke=1.e+3,
                 limit_kd=1.e+1,
                 armature=0.007,
-                load_stiffness=True,
-                load_armature=True)
+                up_axis='Y')
 
             # base transform
             start_pos_z = i*self.env_dist
-            self.start_pos.append([0.0, start_height, start_pos_z])
+            start_pos.append([0.0, start_height, start_pos_z])
 
-            self.builder.joint_q[i*self.num_joint_q:i*self.num_joint_q + 3] = self.start_pos[-1]
+            self.builder.joint_q[i*self.num_joint_q:i*self.num_joint_q + 3] = start_pos[-1]
             self.builder.joint_q[i*self.num_joint_q + 3:i*self.num_joint_q + 7] = self.start_rot
 
         num_q = int(len(self.builder.joint_q)/self.num_environments)
@@ -154,38 +253,46 @@ class HumanoidWarpEnv(WarpEnv):
 
         print("Start joint_q: ", self.builder.joint_q[0:num_q])
 
-        self.start_joint_q = self.builder.joint_q[7:num_q].copy()
-        self.start_joint_target = self.start_joint_q.copy()
+        start_joint_q = self.builder.joint_q[7:num_q].copy()
+        start_joint_target = start_joint_q.copy()
 
-        self.start_pos = tu.to_torch(self.start_pos, device=self.device)
-        self.start_joint_q = tu.to_torch(self.start_joint_q, device=self.device)
-        self.start_joint_target = tu.to_torch(self.start_joint_target, device=self.device)
+        self.start_pos = tu.to_torch(start_pos, device=self.device)
+        self.start_joint_q = tu.to_torch(start_joint_q, device=self.device)
+        self.start_joint_target = tu.to_torch(start_joint_target, device=self.device)
 
         # finalize model
-        self.model = self.builder.finalize(self.device)
+        self.model = self.builder.finalize(self.device.type)
         self.model.ground = self.ground
         self.model.gravity = torch.tensor((0.0, -9.81, 0.0), dtype=torch.float32, device=self.device)
 
-        self.integrator = df.sim.SemiImplicitIntegrator()
+        self.integrator = wp.sim.SemiImplicitIntegrator()
 
-        self.state = self.model.state()
+        self.state = self.model.state(requires_grad=True)
+        wp.sim.eval_fk(self.model, self.state.joint_q, self.state.joint_qd, None, self.state)
 
-        num_act = int(len(self.state.joint_act) / self.num_environments) - 6
+        self.control = self.model.control(requires_grad=True)
+
+        self.joint_q = wp.to_torch(wp.clone(self.state.joint_q), requires_grad=True)
+        self.joint_qd = wp.to_torch(wp.clone(self.state.joint_qd), requires_grad=True)
+
+        num_act = int(len(self.control.joint_act) / self.num_environments) - 6
         print('num_act = ', num_act)
 
-        if (self.model.ground):
-            self.model.collide(self.state)
+        if self.model.ground:
+            wp.sim.collide(self.model, self.state)
 
     def render(self, mode = 'human'):
         if self.visualize:
+            self.renderer.begin_frame(self.render_time)
+            self.renderer.render(self.state)
+            self.renderer.end_frame()
             self.render_time += self.dt
-            self.renderer.update(self.state, self.render_time)
 
-            if (self.num_frames == 1):
+            if self.num_frames == 1:
                 try:
                     self.stage.Save()
-                except:
-                    print("USD save error")
+                except Exception as e:
+                    print(f'USD save error: {e}')
 
                 self.num_frames -= 1
 
@@ -201,18 +308,28 @@ class HumanoidWarpEnv(WarpEnv):
                 torch.nan_to_num(grad, 0.0, 0.0, 0.0, out = grad)
             return hook
         
-        if self.state.joint_q.requires_grad:
-            self.state.joint_q.register_hook(create_hook())
-        if self.state.joint_qd.requires_grad:
-            self.state.joint_qd.register_hook(create_hook())
+        if self.joint_q.requires_grad:
+            self.joint_q.register_hook(create_hook())
+        if self.joint_qd.requires_grad:
+            self.joint_qd.register_hook(create_hook())
         if actions.requires_grad:
             actions.register_hook(create_hook())
         #################################################
 
         self.actions = actions.clone()
-        
-        self.state.joint_act.view(self.num_envs, -1)[:, 6:] = actions * self.motor_scale * self.motor_strengths
-        self.state = self.integrator.forward(self.model, self.state, self.sim_dt, self.sim_substeps, self.MM_caching_frequency)
+
+        joint_act = (actions * self.motor_scale * self.motor_strengths).view(-1)
+        self.control.joint_act = wp.from_torch(joint_act, requires_grad=True)
+
+        # simulation
+        if self.no_grad:
+            for _ in range(self.sim_substeps):
+                self.integrator.simulate(self.model, self.state, self.state, self.sim_dt / float(self.sim_substeps), self.control)
+        else:
+            self.joint_q, self.joint_qd = SimulateFunc.apply(self.model, self.state, self.control, self.integrator, self.sim_dt, self.sim_substeps, self.joint_q, self.joint_qd, joint_act)
+
+            global g_state_out
+            self.state = g_state_out
         
         self.sim_time += self.sim_dt
 
@@ -247,23 +364,27 @@ class HumanoidWarpEnv(WarpEnv):
 
         if env_ids is not None:
             # clone the state to avoid gradient error
-            self.state.joint_q = self.state.joint_q.clone()
-            self.state.joint_qd = self.state.joint_qd.clone()
+            self.joint_q = self.joint_q.clone()
+            self.joint_qd = self.joint_qd.clone()
 
             # fixed start state
-            self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] = self.start_pos[env_ids, :].clone()
-            self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = self.start_rotation.clone()
-            self.state.joint_q.view(self.num_envs, -1)[env_ids, 7:] = self.start_joint_q.clone()
-            self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] = 0.
+            self.joint_q.view(self.num_envs, -1)[env_ids, 0:3] = self.start_pos[env_ids, :].clone()
+            self.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = self.start_rotation.clone()
+            self.joint_q.view(self.num_envs, -1)[env_ids, 7:] = self.start_joint_q.clone()
+            self.joint_qd.view(self.num_envs, -1)[env_ids, :] = 0.
 
             # randomization
             if self.stochastic_init:
-                self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] = self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] + 0.1 * (torch.rand(size=(len(env_ids), 3), device=self.device) - 0.5) * 2.
+                self.joint_q.view(self.num_envs, -1)[env_ids, 0:3] = self.joint_q.view(self.num_envs, -1)[env_ids, 0:3] + 0.1 * (torch.rand(size=(len(env_ids), 3), device=self.device) - 0.5) * 2.
                 angle = (torch.rand(len(env_ids), device = self.device) - 0.5) * np.pi / 12.
                 axis = torch.nn.functional.normalize(torch.rand((len(env_ids), 3), device = self.device) - 0.5)
-                self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_mul(self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7], tu.quat_from_angle_axis(angle, axis))
-                self.state.joint_q.view(self.num_envs, -1)[env_ids, 7:] = self.state.joint_q.view(self.num_envs, -1)[env_ids, 7:] + 0.2 * (torch.rand(size=(len(env_ids), self.num_joint_q - 7), device = self.device) - 0.5) * 2.
-                self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] = 0.5 * (torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
+                self.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_mul(self.joint_q.view(self.num_envs, -1)[env_ids, 3:7], tu.quat_from_angle_axis(angle, axis))
+                self.joint_q.view(self.num_envs, -1)[env_ids, 7:] = self.joint_q.view(self.num_envs, -1)[env_ids, 7:] + 0.2 * (torch.rand(size=(len(env_ids), self.num_joint_q - 7), device = self.device) - 0.5) * 2.
+                self.joint_qd.view(self.num_envs, -1)[env_ids, :] = 0.5 * (torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
+
+            # assign to state
+            self.state.joint_q = wp.from_torch(self.joint_q)
+            self.state.joint_qd = wp.from_torch(self.joint_qd)
 
             # clear action
             self.actions = self.actions.clone()
@@ -282,16 +403,17 @@ class HumanoidWarpEnv(WarpEnv):
         with torch.no_grad():
             if checkpoint is None:
                 checkpoint = {}
-                checkpoint['joint_q'] = self.state.joint_q.clone()
-                checkpoint['joint_qd'] = self.state.joint_qd.clone()
+                checkpoint['joint_q'] = self.joint_q.clone()
+                checkpoint['joint_qd'] = self.joint_qd.clone()
                 checkpoint['actions'] = self.actions.clone()
                 checkpoint['progress_buf'] = self.progress_buf.clone()
 
-            current_joint_q = checkpoint['joint_q'].clone()
-            current_joint_qd = checkpoint['joint_qd'].clone()
-            self.state = self.model.state()
-            self.state.joint_q = current_joint_q
-            self.state.joint_qd = current_joint_qd
+            self.joint_q = checkpoint['joint_q'].clone()
+            self.joint_qd = checkpoint['joint_qd'].clone()
+            self.state = self.model.state(requires_grad=True)
+            self.state.joint_q = wp.from_torch(self.joint_q.clone())
+            self.state.joint_qd = wp.from_torch(self.joint_qd.clone())
+            wp.sim.eval_fk(self.model, self.state.joint_q, self.state.joint_qd, None, self.state)
             self.actions = checkpoint['actions'].clone()
             self.progress_buf = checkpoint['progress_buf'].clone()
 
@@ -307,18 +429,18 @@ class HumanoidWarpEnv(WarpEnv):
 
     def get_checkpoint(self):
         checkpoint = {}
-        checkpoint['joint_q'] = self.state.joint_q.clone()
-        checkpoint['joint_qd'] = self.state.joint_qd.clone()
+        checkpoint['joint_q'] = self.joint_q.clone()
+        checkpoint['joint_qd'] = self.joint_qd.clone()
         checkpoint['actions'] = self.actions.clone()
         checkpoint['progress_buf'] = self.progress_buf.clone()
 
         return checkpoint
 
     def calculateObservations(self):
-        torso_pos = self.state.joint_q.view(self.num_envs, -1)[:, 0:3]
-        torso_rot = self.state.joint_q.view(self.num_envs, -1)[:, 3:7]
-        lin_vel = self.state.joint_qd.view(self.num_envs, -1)[:, 3:6]
-        ang_vel = self.state.joint_qd.view(self.num_envs, -1)[:, 0:3]
+        torso_pos = self.joint_q.view(self.num_envs, -1)[:, 0:3]
+        torso_rot = self.joint_q.view(self.num_envs, -1)[:, 3:7]
+        lin_vel = self.joint_qd.view(self.num_envs, -1)[:, 3:6]
+        ang_vel = self.joint_qd.view(self.num_envs, -1)[:, 0:3]
 
         # convert the linear velocity of the torso from twist representation to the velocity of the center of mass in world frame
         lin_vel = lin_vel - torch.cross(torso_pos, ang_vel, dim = -1)
@@ -336,8 +458,8 @@ class HumanoidWarpEnv(WarpEnv):
                                 torso_rot, # 1:5
                                 lin_vel, # 5:8
                                 ang_vel, # 8:11
-                                self.state.joint_q.view(self.num_envs, -1)[:, 7:], # 11:32
-                                self.joint_vel_obs_scaling * self.state.joint_qd.view(self.num_envs, -1)[:, 6:], # 32:53
+                                self.joint_q.view(self.num_envs, -1)[:, 7:], # 11:32
+                                self.joint_vel_obs_scaling * self.joint_qd.view(self.num_envs, -1)[:, 6:], # 32:53
                                 up_vec[:, 1:2], # 53:54
                                 (heading_vec * target_dirs).sum(dim = -1).unsqueeze(-1), # 54:55
                                 self.actions.clone()], # 55:76
@@ -361,10 +483,10 @@ class HumanoidWarpEnv(WarpEnv):
         self.reset_buf = torch.where(self.progress_buf > self.episode_length - 1, torch.ones_like(self.reset_buf), self.reset_buf)
 
         # an ugly fix for simulation nan values
-        nan_masks = torch.logical_or(torch.isnan(self.obs_buf).sum(-1) > 0, torch.logical_or(torch.isnan(self.state.joint_q.view(self.num_environments, -1)).sum(-1) > 0, torch.isnan(self.state.joint_qd.view(self.num_environments, -1)).sum(-1) > 0))
-        inf_masks = torch.logical_or(torch.isinf(self.obs_buf).sum(-1) > 0, torch.logical_or(torch.isinf(self.state.joint_q.view(self.num_environments, -1)).sum(-1) > 0, torch.isinf(self.state.joint_qd.view(self.num_environments, -1)).sum(-1) > 0))
-        invalid_value_masks = torch.logical_or((torch.abs(self.state.joint_q.view(self.num_environments, -1)) > 1e6).sum(-1) > 0,
-                                                (torch.abs(self.state.joint_qd.view(self.num_environments, -1)) > 1e6).sum(-1) > 0)   
+        nan_masks = torch.logical_or(torch.isnan(self.obs_buf).sum(-1) > 0, torch.logical_or(torch.isnan(self.joint_q.view(self.num_environments, -1)).sum(-1) > 0, torch.isnan(self.joint_qd.view(self.num_environments, -1)).sum(-1) > 0))
+        inf_masks = torch.logical_or(torch.isinf(self.obs_buf).sum(-1) > 0, torch.logical_or(torch.isinf(self.joint_q.view(self.num_environments, -1)).sum(-1) > 0, torch.isinf(self.joint_qd.view(self.num_environments, -1)).sum(-1) > 0))
+        invalid_value_masks = torch.logical_or((torch.abs(self.joint_q.view(self.num_environments, -1)) > 1e6).sum(-1) > 0,
+                                                (torch.abs(self.joint_qd.view(self.num_environments, -1)) > 1e6).sum(-1) > 0)
         invalid_masks = torch.logical_or(invalid_value_masks, torch.logical_or(nan_masks, inf_masks))
         
         self.reset_buf = torch.where(invalid_masks, torch.ones_like(self.reset_buf), self.reset_buf)
