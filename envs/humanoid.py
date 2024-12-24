@@ -197,6 +197,8 @@ class HumanoidEnv(DFlexEnv):
             def hook(grad):
                 torch.nan_to_num(grad, 0.0, 0.0, 0.0, out = grad)
             return hook
+
+        print(f'grad status: {self.state.joint_q.requires_grad}, {self.state.joint_qd.requires_grad}, {actions.requires_grad}')
         
         if self.state.joint_q.requires_grad:
             self.state.joint_q.register_hook(create_hook())

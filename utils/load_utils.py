@@ -5,7 +5,7 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-import urdfpy
+# import urdfpy
 import math
 import numpy as np
 import os
@@ -126,107 +126,107 @@ def urdf_add_collision(builder, link, collisions, shape_ke, shape_kd, shape_kf, 
                     kf=shape_kf,
                     mu=shape_mu)
       
-def urdf_load(
-    builder, 
-    filename, 
-    xform, 
-    floating=False, 
-    armature=0.0, 
-    shape_ke=1.e+4, 
-    shape_kd=1.e+4, 
-    shape_kf=1.e+2, 
-    shape_mu=0.25,
-    limit_ke=100.0,
-    limit_kd=1.0):
-
-    robot = urdfpy.URDF.load(filename)
-
-    # maps from link name -> link index
-    link_index = {}
-
-    builder.add_articulation()
-
-    # add base
-    if (floating):
-        root = builder.add_link(-1, df.transform_identity(), (0,0,0), df.JOINT_FREE)
-
-        # set dofs to transform
-        start = builder.joint_q_start[root]
-
-        builder.joint_q[start + 0] = xform[0][0]
-        builder.joint_q[start + 1] = xform[0][1]
-        builder.joint_q[start + 2] = xform[0][2]
-
-        builder.joint_q[start + 3] = xform[1][0]
-        builder.joint_q[start + 4] = xform[1][1]
-        builder.joint_q[start + 5] = xform[1][2]
-        builder.joint_q[start + 6] = xform[1][3]
-    else:    
-        root = builder.add_link(-1, xform, (0,0,0), df.JOINT_FIXED)
-
-    urdf_add_collision(builder, root, robot.links[0].collisions, shape_ke, shape_kd, shape_kf, shape_mu)
-    link_index[robot.links[0].name] = root
-
-    # add children
-    for joint in robot.joints:
-
-        type = None
-        axis = (0.0, 0.0, 0.0)
-
-        if (joint.joint_type == "revolute" or joint.joint_type == "continuous"):
-            type = df.JOINT_REVOLUTE
-            axis = joint.axis
-        if (joint.joint_type == "prismatic"):
-            type = df.JOINT_PRISMATIC
-            axis = joint.axis
-        if (joint.joint_type == "fixed"):
-            type = df.JOINT_FIXED
-        if (joint.joint_type == "floating"):
-            type = df.JOINT_FREE
-        
-        parent = -1
-
-        if joint.parent in link_index:
-            parent = link_index[joint.parent]
-
-        origin = urdfpy.matrix_to_xyz_rpy(joint.origin)
-
-        pos = origin[0:3]
-        rot = df.rpy2quat(*origin[3:6])
-
-        lower = -1.e+3
-        upper = 1.e+3
-        damping = 0.0
-
-        # limits
-        if (joint.limit):
-            
-            if (joint.limit.lower != None):
-                lower = joint.limit.lower
-            if (joint.limit.upper != None):
-                upper = joint.limit.upper
-
-        # damping
-        if (joint.dynamics):
-            if (joint.dynamics.damping):
-                damping = joint.dynamics.damping
-        # add link
-        link = builder.add_link(
-            parent=parent, 
-            X_pj=df.transform(pos, rot), 
-            axis=axis, 
-            type=type,
-            limit_lower=lower,
-            limit_upper=upper,
-            limit_ke=limit_ke,
-            limit_kd=limit_kd,
-            damping=damping)
-
-        # add collisions
-        urdf_add_collision(builder, link, robot.link_map[joint.child].collisions, shape_ke, shape_kd, shape_kf, shape_mu)
-
-        # add ourselves to the index
-        link_index[joint.child] = link
+# def urdf_load(
+#     builder,
+#     filename,
+#     xform,
+#     floating=False,
+#     armature=0.0,
+#     shape_ke=1.e+4,
+#     shape_kd=1.e+4,
+#     shape_kf=1.e+2,
+#     shape_mu=0.25,
+#     limit_ke=100.0,
+#     limit_kd=1.0):
+#
+#     robot = urdfpy.URDF.load(filename)
+#
+#     # maps from link name -> link index
+#     link_index = {}
+#
+#     builder.add_articulation()
+#
+#     # add base
+#     if (floating):
+#         root = builder.add_link(-1, df.transform_identity(), (0,0,0), df.JOINT_FREE)
+#
+#         # set dofs to transform
+#         start = builder.joint_q_start[root]
+#
+#         builder.joint_q[start + 0] = xform[0][0]
+#         builder.joint_q[start + 1] = xform[0][1]
+#         builder.joint_q[start + 2] = xform[0][2]
+#
+#         builder.joint_q[start + 3] = xform[1][0]
+#         builder.joint_q[start + 4] = xform[1][1]
+#         builder.joint_q[start + 5] = xform[1][2]
+#         builder.joint_q[start + 6] = xform[1][3]
+#     else:
+#         root = builder.add_link(-1, xform, (0,0,0), df.JOINT_FIXED)
+#
+#     urdf_add_collision(builder, root, robot.links[0].collisions, shape_ke, shape_kd, shape_kf, shape_mu)
+#     link_index[robot.links[0].name] = root
+#
+#     # add children
+#     for joint in robot.joints:
+#
+#         type = None
+#         axis = (0.0, 0.0, 0.0)
+#
+#         if (joint.joint_type == "revolute" or joint.joint_type == "continuous"):
+#             type = df.JOINT_REVOLUTE
+#             axis = joint.axis
+#         if (joint.joint_type == "prismatic"):
+#             type = df.JOINT_PRISMATIC
+#             axis = joint.axis
+#         if (joint.joint_type == "fixed"):
+#             type = df.JOINT_FIXED
+#         if (joint.joint_type == "floating"):
+#             type = df.JOINT_FREE
+#
+#         parent = -1
+#
+#         if joint.parent in link_index:
+#             parent = link_index[joint.parent]
+#
+#         origin = urdfpy.matrix_to_xyz_rpy(joint.origin)
+#
+#         pos = origin[0:3]
+#         rot = df.rpy2quat(*origin[3:6])
+#
+#         lower = -1.e+3
+#         upper = 1.e+3
+#         damping = 0.0
+#
+#         # limits
+#         if (joint.limit):
+#
+#             if (joint.limit.lower != None):
+#                 lower = joint.limit.lower
+#             if (joint.limit.upper != None):
+#                 upper = joint.limit.upper
+#
+#         # damping
+#         if (joint.dynamics):
+#             if (joint.dynamics.damping):
+#                 damping = joint.dynamics.damping
+#         # add link
+#         link = builder.add_link(
+#             parent=parent,
+#             X_pj=df.transform(pos, rot),
+#             axis=axis,
+#             type=type,
+#             limit_lower=lower,
+#             limit_upper=upper,
+#             limit_ke=limit_ke,
+#             limit_kd=limit_kd,
+#             damping=damping)
+#
+#         # add collisions
+#         urdf_add_collision(builder, link, robot.link_map[joint.child].collisions, shape_ke, shape_kd, shape_kf, shape_mu)
+#
+#         # add ourselves to the index
+#         link_index[joint.child] = link
 
 # build an articulated tree
 def build_tree(

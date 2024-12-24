@@ -9,6 +9,7 @@ from multiprocessing.sharedctypes import Value
 import sys, os
 
 from torch.nn.utils.clip_grad import clip_grad_norm_
+from torchviz import make_dot
 
 project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.append(project_dir)
@@ -37,14 +38,14 @@ class SHAC:
         env_fn = getattr(envs, cfg["params"]["diff_env"]["name"])
 
         seeding(cfg["params"]["general"]["seed"])
-        self.env = env_fn(num_envs = cfg["params"]["config"]["num_actors"], \
-                            device = cfg["params"]["general"]["device"], \
-                            render = cfg["params"]["general"]["render"], \
-                            seed = cfg["params"]["general"]["seed"], \
-                            episode_length=cfg["params"]["diff_env"].get("episode_length", 250), \
-                            stochastic_init = cfg["params"]["diff_env"].get("stochastic_env", True), \
-                            MM_caching_frequency = cfg["params"]['diff_env'].get('MM_caching_frequency', 1), \
-                            no_grad = False)
+        self.env = env_fn(num_envs = cfg["params"]["config"]["num_actors"],
+                          device = cfg["params"]["general"]["device"],
+                          render = cfg["params"]["general"]["render"],
+                          seed = cfg["params"]["general"]["seed"],
+                          episode_length=cfg["params"]["diff_env"].get("episode_length", 250),
+                          stochastic_init = cfg["params"]["diff_env"].get("stochastic_env", True),
+                          MM_caching_frequency = cfg["params"]['diff_env'].get('MM_caching_frequency', 1),
+                          no_grad = False)
 
         print('num_envs = ', self.env.num_envs)
         print('num_actions = ', self.env.num_actions)
@@ -406,7 +407,7 @@ class SHAC:
             self.time_report.start_timer("forward simulation")
             actor_loss = self.compute_actor_loss()
             self.time_report.end_timer("forward simulation")
-
+            # make_dot(actor_loss).render("actor_loss", format="png")
             self.time_report.start_timer("backward simulation")
             actor_loss.backward()
             self.time_report.end_timer("backward simulation")
@@ -419,7 +420,7 @@ class SHAC:
                 
                 # sanity check
                 if torch.isnan(self.grad_norm_before_clip) or self.grad_norm_before_clip > 1000000.:
-                    print('NaN gradient')
+                    print('NaN gradient: grad_norm_before_clip = {:.2f}'.format(self.grad_norm_before_clip))
                     raise ValueError
 
             self.time_report.end_timer("compute actor loss")
