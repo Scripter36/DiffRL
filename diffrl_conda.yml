@@ -14,3 +14,4 @@ dependencies:
       - tensorboardx==2.6.2.2
       - usd-core==24.11
       - warp-lang==1.5.0
+      - -e externals/rl_games
