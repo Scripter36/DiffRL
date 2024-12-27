@@ -451,7 +451,7 @@ class SNUHumanoidFullEnv(DFlexEnv):
 
         progress_reward = self.obs_buf[:, 5]
 
-        self.rew_buf = progress_reward + up_reward + heading_reward + act_penalty
+        self.rew_buf = progress_reward + up_reward + heading_reward + act_penalty + height_reward
 
         # reset agents
         self.reset_buf = torch.where(self.obs_buf[:, 0] < self.termination_height, torch.ones_like(self.reset_buf),
