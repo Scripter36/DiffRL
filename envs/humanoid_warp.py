@@ -61,7 +61,6 @@ class SimulateFunc(torch.autograd.Function):
             # collision detection
             wp.sim.collide(model, state_in)
             for i in range(substeps):
-                # ensure actuation is set on all substeps
                 state_out = model.state()
                 integrator.simulate(model, state_in, state_out, dt / float(substeps), control)
                 # swap states
@@ -301,6 +300,7 @@ class HumanoidWarpEnv(WarpEnv):
             self.renderer.render(self.state)
             self.renderer.end_frame()
             self.render_time += self.dt
+            print(f'render time: {self.render_time}')
 
             if self.num_frames == 1:
                 try:
@@ -342,6 +342,9 @@ class HumanoidWarpEnv(WarpEnv):
             for _ in range(self.sim_substeps):
                 self.integrator.simulate(self.model, self.state, self.state, self.sim_dt / float(self.sim_substeps),
                                          self.control)
+            wp.sim.eval_ik(self.model, self.state, self.state.joint_q, self.state.joint_qd)
+            self.joint_q = wp.to_torch(self.state.joint_q)
+            self.joint_qd = wp.to_torch(self.state.joint_qd)
         else:
             self.joint_q, self.joint_qd = SimulateFunc.apply(self.model, self.state, self.control, self.integrator,
                                                              self.sim_dt, self.sim_substeps, self.joint_q,
