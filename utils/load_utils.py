@@ -633,6 +633,7 @@ class Skeleton:
                         joint_X_p = df.transform_identity()
 
                     # add link
+                    # print(f'add_link {name} {joint_type} {joint_lower} {joint_upper} {joint_axis}')
                     link = builder.add_link(
                         parent=parent_link, 
                         X_pj=joint_X_p,

@@ -12,6 +12,7 @@ import sys
 import torch
 
 from envs.dflex_env import DFlexEnv
+from utils.forward_kinematics import eval_rigid_fk_grad
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -74,7 +75,7 @@ class SNUHumanoidFullEnv(DFlexEnv):
         self.init_sim()
 
         # other parameters
-        self.termination_height = 0.46
+        self.termination_height = 0.74 if self.use_full_humanoid else 0.46
         self.termination_tolerance = 0.05
         self.height_rew_scale = 4.0
         self.action_strength = 100.0
@@ -138,6 +139,9 @@ class SNUHumanoidFullEnv(DFlexEnv):
         self.asset_folder = os.path.join(os.path.dirname(__file__), 'assets/snu')
         asset_path = os.path.join(self.asset_folder, "human.xml")
         muscle_path = os.path.join(self.asset_folder, "muscle284.xml")
+
+        # used when using the full humanoid
+        self.torso_index = 13 if self.use_full_humanoid else -1
 
         for i in range(self.num_environments):
 
@@ -216,6 +220,7 @@ class SNUHumanoidFullEnv(DFlexEnv):
     def render(self, mode='human'):
 
         if self.visualize:
+            self.render_time += self.dt * self.inv_control_freq
             with torch.no_grad():
 
                 muscle_start = 0
@@ -256,7 +261,6 @@ class SNUHumanoidFullEnv(DFlexEnv):
                         muscle_start += len(s.muscles)
                     skel_index += 1
 
-            self.render_time += self.dt * self.inv_control_freq
             self.renderer.update(self.state, self.render_time)
 
             if (self.num_frames == 1):
@@ -407,25 +411,31 @@ class SNUHumanoidFullEnv(DFlexEnv):
         return checkpoint
 
     def calculateObservations(self):
-        torso_pos = self.state.joint_q.view(self.num_envs, -1)[:, 0:3]
-        torso_rot = self.state.joint_q.view(self.num_envs, -1)[:, 3:7]
+        # forward kinematics
+
+        pelvis_pos = self.state.joint_q.view(self.num_envs, -1)[:, 0:3]
+        pelvis_rot = self.state.joint_q.view(self.num_envs, -1)[:, 3:7]
+        torso_pos = None
+        if self.use_full_humanoid:
+            body_X_sc, body_X_sm = eval_rigid_fk_grad(self.model, self.state)
+            torso_pos = body_X_sc.view(self.num_envs, -1, 7)[:, self.torso_index, 0:3]
+
         lin_vel = self.state.joint_qd.view(self.num_envs, -1)[:, 3:6]
         ang_vel = self.state.joint_qd.view(self.num_envs, -1)[:, 0:3]
-
         # convert the linear velocity of the torso from twist representation to the velocity of the center of mass in world frame
-        lin_vel = lin_vel - torch.cross(torso_pos, ang_vel, dim=-1)
+        lin_vel = lin_vel - torch.cross(pelvis_pos, ang_vel, dim=-1)
 
-        to_target = self.targets + self.start_pos - torso_pos
+        to_target = self.targets + self.start_pos - pelvis_pos
         to_target[:, 1] = 0.0
 
         target_dirs = tu.normalize(to_target)
-        torso_quat = tu.quat_mul(torso_rot, self.inv_start_rot)
+        pelvis_quat = tu.quat_mul(pelvis_rot, self.inv_start_rot)
 
-        up_vec = tu.quat_rotate(torso_quat, self.basis_vec1)
-        heading_vec = tu.quat_rotate(torso_quat, self.basis_vec0)
+        up_vec = tu.quat_rotate(pelvis_quat, self.basis_vec1)
+        heading_vec = tu.quat_rotate(pelvis_quat, self.basis_vec0)
 
-        self.obs_buf = torch.cat([torso_pos[:, 1:2],  # 0
-                                  torso_rot,  # 1:5
+        self.obs_buf = torch.cat([torso_pos[:, 1:2] if self.use_full_humanoid else pelvis_pos[:, 1:2],  # 0
+                                  pelvis_rot,  # 1:5
                                   lin_vel,  # 5:8
                                   ang_vel,  # 8:11
                                   self.state.joint_q.view(self.num_envs, -1)[:, 7:],  # 11:33
@@ -451,7 +461,9 @@ class SNUHumanoidFullEnv(DFlexEnv):
 
         progress_reward = self.obs_buf[:, 5]
 
-        self.rew_buf = progress_reward + up_reward + heading_reward + act_penalty + height_reward
+        self.rew_buf = progress_reward + up_reward + heading_reward + act_penalty
+        if self.use_full_humanoid:
+            self.rew_buf += height_reward
 
         # reset agents
         self.reset_buf = torch.where(self.obs_buf[:, 0] < self.termination_height, torch.ones_like(self.reset_buf),
