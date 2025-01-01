@@ -31,6 +31,8 @@ from utils import load_utils as lu
 from utils import torch_utils as tu
 
 
+
+
 class SNUHumanoidFullEnv(DFlexEnv):
 
     def __init__(self, render=False, device='cuda:0', num_envs=4096, seed=0, episode_length=1000, no_grad=True,
@@ -38,6 +40,8 @@ class SNUHumanoidFullEnv(DFlexEnv):
 
         self.use_full_humanoid = True
         self.mtu_actuations = True
+
+        # df.config.verify_fp = True
 
         if self.use_full_humanoid:
             self.filter = {}
@@ -155,7 +159,7 @@ class SNUHumanoidFullEnv(DFlexEnv):
                                        contact_mu=0.5,
                                        limit_ke=1e3,
                                        limit_kd=1e1,
-                                       armature=0.05)
+                                       armature=0.1)
             else:
                 skeleton = lu.Skeleton(asset_path, None, self.builder, self.filter,
                                        stiffness=5.0,
@@ -166,7 +170,7 @@ class SNUHumanoidFullEnv(DFlexEnv):
                                        contact_mu=0.5,
                                        limit_ke=1e3,
                                        limit_kd=1e1,
-                                       armature=0.05)
+                                       armature=0.1)
 
             # set initial position 1m off the ground
             self.builder.joint_q[skeleton.coord_start + 2] = i * self.env_dist
@@ -415,10 +419,13 @@ class SNUHumanoidFullEnv(DFlexEnv):
 
         pelvis_pos = self.state.joint_q.view(self.num_envs, -1)[:, 0:3]
         pelvis_rot = self.state.joint_q.view(self.num_envs, -1)[:, 3:7]
+        rot_quat = tu.quat_mul(pelvis_rot, self.inv_start_rot)
         torso_pos = None
         if self.use_full_humanoid:
             body_X_sc, body_X_sm = eval_rigid_fk_grad(self.model, self.state)
             torso_pos = body_X_sc.view(self.num_envs, -1, 7)[:, self.torso_index, 0:3]
+            torso_rot = body_X_sc.view(self.num_envs, -1, 7)[:, self.torso_index - 1, 3:7]
+            rot_quat = tu.quat_mul(torso_rot, self.inv_start_rot)
 
         lin_vel = self.state.joint_qd.view(self.num_envs, -1)[:, 3:6]
         ang_vel = self.state.joint_qd.view(self.num_envs, -1)[:, 0:3]
@@ -429,10 +436,9 @@ class SNUHumanoidFullEnv(DFlexEnv):
         to_target[:, 1] = 0.0
 
         target_dirs = tu.normalize(to_target)
-        pelvis_quat = tu.quat_mul(pelvis_rot, self.inv_start_rot)
 
-        up_vec = tu.quat_rotate(pelvis_quat, self.basis_vec1)
-        heading_vec = tu.quat_rotate(pelvis_quat, self.basis_vec0)
+        up_vec = tu.quat_rotate(rot_quat, self.basis_vec1)
+        heading_vec = tu.quat_rotate(rot_quat, self.basis_vec0)
 
         self.obs_buf = torch.cat([torso_pos[:, 1:2] if self.use_full_humanoid else pelvis_pos[:, 1:2],  # 0
                                   pelvis_rot,  # 1:5
@@ -450,7 +456,7 @@ class SNUHumanoidFullEnv(DFlexEnv):
         up_reward = 0.1 * self.obs_buf[:, -2]  # 51
         heading_reward = self.obs_buf[:, -1]  # 52
 
-        height_diff = self.obs_buf[:, 0] - (self.termination_height + self.termination_tolerance)
+        height_diff = self.obs_buf[:, 0] - self.termination_height
         height_reward = torch.clip(height_diff, -1.0, self.termination_tolerance)
         height_reward = torch.where(height_reward < 0.0, -200.0 * height_reward * height_reward,
                                     height_reward)  # JIE: not smooth

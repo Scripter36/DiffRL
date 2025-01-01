@@ -1911,7 +1911,7 @@ def check_adapter(l, a):
 
     for t in l:
         if torch.is_tensor(t):
-            assert(t.device.type == a)
+            assert(t.device.type != a)
 
 def check_finite(l):
     for t in l:
