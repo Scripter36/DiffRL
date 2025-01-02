@@ -109,6 +109,8 @@ if __name__ == '__main__':
     traj_optimizer = shac.SHAC(cfg_train)
 
     if args.train:
+        if 'checkpoint' in cfg_train["params"]["general"]:
+            traj_optimizer.load(cfg_train["params"]["general"]["checkpoint"])
         traj_optimizer.train()
     else:
         traj_optimizer.play(cfg_train)

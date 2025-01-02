@@ -41,8 +41,6 @@ class SNUHumanoidFullEnv(DFlexEnv):
         self.use_full_humanoid = True
         self.mtu_actuations = True
 
-        # df.config.verify_fp = True
-
         if self.use_full_humanoid:
             self.filter = {}
             self.num_joint_q = 71
@@ -159,7 +157,7 @@ class SNUHumanoidFullEnv(DFlexEnv):
                                        contact_mu=0.5,
                                        limit_ke=1e3,
                                        limit_kd=1e1,
-                                       armature=0.1)
+                                       armature=0.05)
             else:
                 skeleton = lu.Skeleton(asset_path, None, self.builder, self.filter,
                                        stiffness=5.0,
@@ -170,7 +168,7 @@ class SNUHumanoidFullEnv(DFlexEnv):
                                        contact_mu=0.5,
                                        limit_ke=1e3,
                                        limit_kd=1e1,
-                                       armature=0.1)
+                                       armature=0.05)
 
             # set initial position 1m off the ground
             self.builder.joint_q[skeleton.coord_start + 2] = i * self.env_dist
@@ -488,6 +486,9 @@ class SNUHumanoidFullEnv(DFlexEnv):
             (torch.abs(self.state.joint_q.view(self.num_environments, -1)) > 1e6).sum(-1) > 0,
             (torch.abs(self.state.joint_qd.view(self.num_environments, -1)) > 1e6).sum(-1) > 0)
         invalid_masks = torch.logical_or(invalid_value_masks, torch.logical_or(nan_masks, inf_masks))
+
+        if sum(invalid_masks) > 0:
+            print("Invalid values detected")
 
         self.reset_buf = torch.where(invalid_masks, torch.ones_like(self.reset_buf), self.reset_buf)
 

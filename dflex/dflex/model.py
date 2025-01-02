@@ -759,12 +759,12 @@ class ModelBuilder:
             self.joint_q.append(1.0)
 
             # note armature for free joints should always be zero, better to modify the body inertia directly
-            self.joint_armature.append(0.0)
-            self.joint_armature.append(0.0)
-            self.joint_armature.append(0.0)
-            self.joint_armature.append(0.0)
-            self.joint_armature.append(0.0)
-            self.joint_armature.append(0.0)
+            self.joint_armature.append(armature)
+            self.joint_armature.append(armature)
+            self.joint_armature.append(armature)
+            self.joint_armature.append(armature)
+            self.joint_armature.append(armature)
+            self.joint_armature.append(armature)
 
             self.joint_target.append(0.0)
             self.joint_target.append(0.0)
