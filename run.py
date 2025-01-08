@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import re
 from pathlib import Path
@@ -48,7 +49,7 @@ def main():
         print(f"\033[93mRunning training for environment: {selected_env_name}\033[0m")  # Yellow text for status messages
         # Print command in white (default)
         print(f"python examples/train_shac.py --cfg {selected_env} --logdir {log_dir}")
-        os.system(f"python examples/train_shac.py --cfg {selected_env} --logdir {log_dir}")
+        subprocess.run([sys.executable, "examples/train_shac.py", "--cfg", selected_env, "--logdir", log_dir])
 
     elif choice == "2":
         # Rendering mode
@@ -86,12 +87,10 @@ def main():
         # Print command in white (default)
         if do_render:
             print(f"python examples/train_shac.py --cfg {config_path}/{selected_env_name}.yaml --checkpoint {selected_policy} --play --render")
-            os.system(
-            f"python examples/train_shac.py --cfg {config_path}/{selected_env_name}.yaml --checkpoint {selected_policy} --play --render")
+            subprocess.run([sys.executable, "examples/train_shac.py", "--cfg", config_path / f"{selected_env_name}.yaml", "--checkpoint", selected_policy, "--play", "--render"])
         else:
             print(f"python examples/train_shac.py --cfg {config_path}/{selected_env_name}.yaml --checkpoint {selected_policy} --play")
-            os.system(
-            f"python examples/train_shac.py --cfg {config_path}/{selected_env_name}.yaml --checkpoint {selected_policy} --play")
+            subprocess.run([sys.executable, "examples/train_shac.py", "--cfg", config_path / f"{selected_env_name}.yaml", "--checkpoint", selected_policy, "--play"])
 
     else:
         print("\033[93mInvalid choice. Exiting.\033[0m")  # Yellow text for errors

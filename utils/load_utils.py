@@ -544,6 +544,7 @@ class Skeleton:
         self.node_map = {}       # map node names to link indices
         self.xform_map = {}      # map node names to parent transforms
         self.mesh_map = {}       # map mesh names to link indices objects
+        self.bvh_map = {}        # map bvh names to link indices
 
         self.coord_start = len(builder.joint_q)
         self.dof_start = len(builder.joint_qd)
@@ -581,6 +582,7 @@ class Skeleton:
                 body_mesh = body.attrib["obj"]
                 body_size = np.fromstring(body.attrib["size"], sep=" ")
                 body_type = body.attrib["type"]
+                joint_bvh_name = joint.attrib.get("bvh", None)
                 body_mass = float(body.attrib["mass"])
 
                 x=body_size[0]
@@ -667,6 +669,8 @@ class Skeleton:
                 self.xform_map[name] = joint_X_s
                 self.node_map[name] = link
                 self.mesh_map[mesh_base] = link
+                if joint_bvh_name is not None:
+                    self.bvh_map[joint_bvh_name] = link
 
     def parse_muscles(self, filename, builder):
 
@@ -721,5 +725,73 @@ class Skeleton:
 
         self.muscles = muscles
 
+# Below is a bvh parser to load motion data.
+# for dflex compatibility, we will convert the motion data to a format that can be used by dflex state.
+# joint_q is a 1D array of joint angles in quaternion format, with the first 3 elements being the position and the last are the rotation.
+def load_bvh(filename, bvh_link_map: 'dict[str, int]') -> 'tuple[float, np.ndarray, np.ndarray]':
+    # 1. load skeleton structure, and map the bvh joint names to indices.
+    # we do not need to load the offset, and ignore the end effector.
+    with open(filename, 'r') as file:
+        lines = file.readlines()
 
+    bvh_index_map = {} # { bvh_name: index }
+    bvh_names = [] # [ bvh_name, ... ]
+    bvh_channel_map = {} # { bvh_name: [ channel_name, ... ] }
+    
+    index = 0
+    motion_start_index = -1
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if line.startswith("ROOT") or line.startswith("JOINT"):
+            bvh_name = line.split()[1]
+            bvh_index_map[bvh_name] = index
+            bvh_names.append(bvh_name)
+            index += 1
+        elif line.startswith("CHANNELS"):
+            bvh_channel_map[bvh_names[index - 1]] = line.split()[2:]
+        elif line.startswith("MOTION"):
+            frames = int(lines[i + 1].split()[1])
+            frame_time = float(lines[i + 2].split()[2])
+            motion_start_index = i + 3
+            break
 
+    # 2. allocate the array
+    joint_q = np.zeros((frames, 3 + 4 * max(bvh_index_map.values())))
+    joint_q_mask = np.zeros((1, 3 + 4 * max(bvh_index_map.values())))
+
+    # 3. fill the mask array.
+    joint_q_mask[0, :3] = 1.0
+    for bvh_name in bvh_names:
+        if bvh_name in bvh_link_map:
+            joint_q_mask[0, 3 + 4 * bvh_link_map[bvh_name]: 3 + 4 * (bvh_link_map[bvh_name] + 1)] = 1.0
+
+    # 4. load motion data, and fill the joint_q array.
+    # assume that the first 3 channels are position x, y, z.
+    assert bvh_channel_map[bvh_names[0]][:3] == ["Xposition", "Yposition", "Zposition"], "The first 3 channels must be position x, y, z."
+
+    for frame in range(frames):
+        motion_line = lines[motion_start_index + frame]
+        motion_data = np.fromstring(motion_line, sep=" ")
+        motion_index = 0
+
+        # fill the position data.
+        joint_q[frame, :3] = motion_data[:3]
+
+        # fill the rotation data.
+        for bvh_name in bvh_names:
+            if bvh_name not in bvh_link_map:
+                continue
+            bvh_index = bvh_link_map[bvh_name]
+            quat = df.quat_identity()
+            for channel_index, channel in enumerate(bvh_channel_map[bvh_name]):
+                if channel == "Xrotation":
+                    quat = df.quat_multiply(quat, df.quat_from_axis_angle(np.array((1.0, 0.0, 0.0)), motion_data[motion_index + channel_index] * math.pi / 180.0))
+                elif channel == "Yrotation":
+                    quat = df.quat_multiply(quat, df.quat_from_axis_angle(np.array((0.0, 1.0, 0.0)), motion_data[motion_index + channel_index] * math.pi / 180.0))
+                elif channel == "Zrotation":
+                    quat = df.quat_multiply(quat, df.quat_from_axis_angle(np.array((0.0, 0.0, 1.0)), motion_data[motion_index + channel_index] * math.pi / 180.0))
+            motion_index += len(bvh_channel_map[bvh_name])
+            joint_q[frame, 3 + 4 * bvh_index: 3 + 4 * (bvh_index + 1)] = quat
+    
+    # 4. return the frame time and joint_q array.
+    return frame_time, joint_q, joint_q_mask

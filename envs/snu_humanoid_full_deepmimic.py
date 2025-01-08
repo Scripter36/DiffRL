@@ -173,6 +173,11 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.start_joint_q = tu.to_torch(self.start_joint_q, device=self.device)
         self.start_joint_target = tu.to_torch(self.start_joint_target, device=self.device)
 
+        # load reference motion
+        self.reference_frame_time, reference_joint_q, reference_joint_q_mask = lu.load_bvh(os.path.join(self.asset_folder, "motion/walk.bvh"), self.skeletons[0].bvh_map)
+        self.reference_joint_q = tu.to_torch(reference_joint_q, device=self.device)
+        self.reference_joint_q_mask = tu.to_torch(reference_joint_q_mask, device=self.device)
+
         # finalize model
         self.model = self.builder.finalize(self.device)
         self.model.ground = self.ground
@@ -260,12 +265,16 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         self.actions = actions.clone()
 
-        for ci in range(self.inv_control_freq):
-            self.model.muscle_activation = actions.view(-1) * self.muscle_strengths
+        # for ci in range(self.inv_control_freq):
+        #     self.model.muscle_activation = actions.view(-1) * self.muscle_strengths
 
-            self.state = self.integrator.forward(self.model, self.state, self.sim_dt, self.sim_substeps,
-                                                 self.MM_caching_frequency)
-            self.sim_time += self.sim_dt
+        #     self.state = self.integrator.forward(self.model, self.state, self.sim_dt, self.sim_substeps,
+        #                                          self.MM_caching_frequency)
+        #     self.sim_time += self.sim_dt
+
+        # very simple test: just copy the reference motion
+        frame_index = torch.round((self.progress_buf * self.dt) / self.reference_frame_time).long() % self.reference_joint_q.shape[0]
+        self.state.joint_q = torch.where(self.reference_joint_q_mask == 1.0, self.reference_joint_q[frame_index], self.state.joint_q)
 
         self.reset_buf = torch.zeros_like(self.reset_buf)
 
