@@ -3,29 +3,6 @@ import sys
 import re
 from pathlib import Path
 
-
-# Function to convert snake_case to PascalCase
-def snake_to_pascal(snake_str):
-    return ''.join(word.capitalize() for word in snake_str.split('_'))
-
-
-# Function to convert PascalCase to snake_case
-# append _ between upper and lower
-# ex - PascalCase -> pascal_case
-# ex2 - PascalCASE -> pascal_case
-def pascal_to_snake(pascal_str):
-    final_str = ''
-    for i, char in enumerate(pascal_str):
-        if i == len(pascal_str) - 1:
-            final_str += char.lower()
-        else:
-            next_char = pascal_str[i + 1]
-            if next_char.islower() and char.isupper():
-                final_str += f"{char.lower()}_"
-            else:
-                final_str += char.lower()
-    return final_str
-
 # Function to list files or directories
 def list_items(path, filter_ext=None):
     items = sorted(Path(path).iterdir())
@@ -45,6 +22,9 @@ def prompt_choice(options, message):
         print("\033[93mInvalid choice. Exiting.\033[0m")  # Yellow text for errors
         sys.exit(1)
 
+config_path = Path("examples/cfg/shac")
+logs_path = Path("examples/logs")
+do_render = True
 
 def main():
     print("\033[93mSelect an option:\033[0m")  # Yellow text for headers
@@ -55,7 +35,7 @@ def main():
     if choice == "1":
         # Training mode
         print("\033[93mTraining mode selected.\033[0m")  # Yellow text for status messages
-        config_path = Path("examples/cfg/shac")
+        
         env_files = list_items(config_path, ".yaml")
         if not env_files:
             print("\033[93mNo environments found.\033[0m")  # Yellow text for errors
@@ -63,7 +43,7 @@ def main():
 
         selected_env = prompt_choice(env_files, "Select an environment by number")
         selected_env_name = selected_env.stem
-        log_dir = f"examples/logs/{selected_env_name}/shac"
+        log_dir = logs_path / selected_env_name / "shac"
 
         print(f"\033[93mRunning training for environment: {selected_env_name}\033[0m")  # Yellow text for status messages
         # Print command in white (default)
@@ -73,7 +53,7 @@ def main():
     elif choice == "2":
         # Rendering mode
         print("\033[93mRendering mode selected.\033[0m")  # Yellow text for status messages
-        logs_path = Path("examples/logs")
+        
         env_dirs = list_items(logs_path, None)
         if not env_dirs:
             print("\033[93mNo environments found.\033[0m")  # Yellow text for errors
@@ -104,9 +84,14 @@ def main():
 
         print(f"\033[93mRunning rendering for environment: {selected_env_name}\033[0m")  # Yellow text for status messages
         # Print command in white (default)
-        print(f"python examples/train_shac.py --cfg examples/cfg/shac/{selected_env_name}.yaml --checkpoint {selected_policy} --play --render")
-        os.system(
-            f"python examples/train_shac.py --cfg examples/cfg/shac/{selected_env_name}.yaml --checkpoint {selected_policy} --play --render")
+        if do_render:
+            print(f"python examples/train_shac.py --cfg {config_path}/{selected_env_name}.yaml --checkpoint {selected_policy} --play --render")
+            os.system(
+            f"python examples/train_shac.py --cfg {config_path}/{selected_env_name}.yaml --checkpoint {selected_policy} --play --render")
+        else:
+            print(f"python examples/train_shac.py --cfg {config_path}/{selected_env_name}.yaml --checkpoint {selected_policy} --play")
+            os.system(
+            f"python examples/train_shac.py --cfg {config_path}/{selected_env_name}.yaml --checkpoint {selected_policy} --play")
 
     else:
         print("\033[93mInvalid choice. Exiting.\033[0m")  # Yellow text for errors

@@ -12,7 +12,7 @@ import sys
 import torch
 
 from envs.dflex_env import DFlexEnv
-from utils.forward_kinematics import eval_rigid_fk_grad
+from utils.forward_kinematics import eval_rigid_fk_grad, eval_rigid_id_grad
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -33,27 +33,16 @@ from utils import torch_utils as tu
 
 
 
-class SNUHumanoidFullEnv(DFlexEnv):
+class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
     def __init__(self, render=False, device='cuda:0', num_envs=4096, seed=0, episode_length=1000, no_grad=True,
                  stochastic_init=False, MM_caching_frequency=1):
 
-        self.use_full_humanoid = True
-        self.mtu_actuations = True
-
-        if self.use_full_humanoid:
-            self.filter = {}
-            self.num_joint_q = 71
-            self.num_joint_qd = 56
-            self.num_muscles = 284
-            num_obs = 127
-        else:
-            self.filter = {"Pelvis", "FemurR", "TibiaR", "TalusR", "FootThumbR", "FootPinkyR", "FemurL", "TibiaL",
-                           "TalusL", "FootThumbL", "FootPinkyL"}
-            self.num_joint_q = 29
-            self.num_joint_qd = 24
-            self.num_muscles = 152
-            num_obs = 53
+        self.filter = {}
+        self.num_joint_q = 71
+        self.num_joint_qd = 56
+        self.num_muscles = 284
+        num_obs = 127
 
         self.skeletons = []
         self.muscle_strengths = []
@@ -64,12 +53,9 @@ class SNUHumanoidFullEnv(DFlexEnv):
 
         self.str_scale = 0.6
 
-        num_act = self.num_joint_qd - 6  # 18
+        num_act = self.num_muscles
 
-        if self.mtu_actuations:
-            num_act = self.num_muscles
-
-        super(SNUHumanoidFullEnv, self).__init__(num_envs, num_obs, num_act, episode_length, MM_caching_frequency, seed,
+        super(SNUHumanoidFullDeepMimicEnv, self).__init__(num_envs, num_obs, num_act, episode_length, MM_caching_frequency, seed,
                                                  no_grad, render, device)
 
         self.stochastic_init = stochastic_init
@@ -77,28 +63,26 @@ class SNUHumanoidFullEnv(DFlexEnv):
         self.init_sim()
 
         # other parameters
-        self.termination_height = 0.74 if self.use_full_humanoid else 0.46
+        self.termination_height = 0.74
         self.termination_tolerance = 0.05
         self.height_rew_scale = 4.0
         self.action_strength = 100.0
         self.action_penalty = -0.001
         self.joint_vel_obs_scaling = 0.1
 
-        self.motor_scale = 0.35 * 1200
-
         # -----------------------
         # set up Usd renderer
         if (self.visualize):
-            self.stage = Usd.Stage.CreateNew("outputs/" + "HumanoidSNU_" + str(self.num_envs) + ".usd")
+            self.stage = Usd.Stage.CreateNew("outputs/" + "HumanoidSNUDeepMimic_" + str(self.num_envs) + ".usd")
 
-            self.renderer = df.render.UsdRenderer(self.model, self.stage)
+            self.renderer = df.UsdRenderer(self.model, self.stage)
             self.renderer.draw_points = True
             self.renderer.draw_springs = True
             self.renderer.draw_shapes = True
             self.render_time = 0.0
 
     def init_sim(self):
-        self.builder = df.sim.ModelBuilder()
+        self.builder = df.ModelBuilder()
 
         self.dt = 1.0 / 60.0
         self.sim_substeps = 48
@@ -142,26 +126,10 @@ class SNUHumanoidFullEnv(DFlexEnv):
         asset_path = os.path.join(self.asset_folder, "human.xml")
         muscle_path = os.path.join(self.asset_folder, "muscle284.xml")
 
-        # used when using the full humanoid
-        self.torso_index = 13 if self.use_full_humanoid else -1
-
         for i in range(self.num_environments):
-
-            if self.mtu_actuations:
-                skeleton = lu.Skeleton(asset_path, muscle_path, self.builder, self.filter,
+            skeleton = lu.Skeleton(asset_path, muscle_path, self.builder, self.filter,
                                        stiffness=5.0,
                                        damping=2.0, # stiffness and damping = k_p, k_d in PD control
-                                       contact_ke=5e3,
-                                       contact_kd=2e3,
-                                       contact_kf=1e3,
-                                       contact_mu=0.5,
-                                       limit_ke=1e3,
-                                       limit_kd=1e1,
-                                       armature=0.05)
-            else:
-                skeleton = lu.Skeleton(asset_path, None, self.builder, self.filter,
-                                       stiffness=5.0,
-                                       damping=2.0,
                                        contact_ke=5e3,
                                        contact_kd=2e3,
                                        contact_kf=1e3,
@@ -187,21 +155,19 @@ class SNUHumanoidFullEnv(DFlexEnv):
 
         print("Start joint_q: ", self.builder.joint_q[0:num_q])
 
-        if self.mtu_actuations:
-            num_muscles = len(self.skeletons[0].muscles)
-            print("Num muscles: ", num_muscles)
+        num_muscles = len(self.skeletons[0].muscles)
+        print("Num muscles: ", num_muscles)
 
         self.start_joint_q = self.builder.joint_q[7:num_q].copy()
         self.start_joint_target = self.start_joint_q.copy()
 
-        if self.mtu_actuations:
-            for m in self.skeletons[0].muscles:
-                self.muscle_strengths.append(self.str_scale * m.muscle_strength)
+        for m in self.skeletons[0].muscles:
+            self.muscle_strengths.append(self.str_scale * m.muscle_strength)
 
-            for mi in range(len(self.muscle_strengths)):
-                self.muscle_strengths[mi] = self.str_scale * self.muscle_strengths[mi]
+        for mi in range(len(self.muscle_strengths)):
+            self.muscle_strengths[mi] = self.str_scale * self.muscle_strengths[mi]
 
-            self.muscle_strengths = tu.to_torch(self.muscle_strengths, device=self.device).repeat(self.num_envs)
+        self.muscle_strengths = tu.to_torch(self.muscle_strengths, device=self.device).repeat(self.num_envs)
 
         self.start_pos = tu.to_torch(self.start_pos, device=self.device)
         self.start_joint_q = tu.to_torch(self.start_joint_q, device=self.device)
@@ -212,7 +178,7 @@ class SNUHumanoidFullEnv(DFlexEnv):
         self.model.ground = self.ground
         self.model.gravity = torch.tensor((0.0, -9.81, 0.0), dtype=torch.float32, device=self.device)
 
-        self.integrator = df.sim.SemiImplicitIntegrator()
+        self.integrator = df.SemiImplicitIntegrator()
 
         self.state = self.model.state()
 
@@ -238,29 +204,28 @@ class SNUHumanoidFullEnv(DFlexEnv):
 
                             self.renderer.add_mesh(mesh, mesh_path, X_sc, 1.0, self.render_time)
 
-                    if self.mtu_actuations:
-                        for m in range(len(s.muscles)):
+                    for m in range(len(s.muscles)):
 
-                            start = self.model.muscle_start[muscle_start + m].item()
-                            end = self.model.muscle_start[muscle_start + m + 1].item()
+                        start = self.model.muscle_start[muscle_start + m].item()
+                        end = self.model.muscle_start[muscle_start + m + 1].item()
 
-                            points = []
+                        points = []
 
-                            for w in range(start, end):
-                                link = self.model.muscle_links[w].item()
-                                point = self.model.muscle_points[w].cpu().numpy()
+                        for w in range(start, end):
+                            link = self.model.muscle_links[w].item()
+                            point = self.model.muscle_points[w].cpu().numpy()
 
-                                X_sc = df.transform_expand(self.state.body_X_sc[link].cpu().tolist())
+                            X_sc = df.transform_expand(self.state.body_X_sc[link].cpu().tolist())
 
-                                points.append(Gf.Vec3f(df.transform_point(X_sc, point).tolist()))
+                            points.append(Gf.Vec3f(df.transform_point(X_sc, point).tolist()))
 
-                            self.renderer.add_line_strip(points, name=s.muscles[m].name + str(skel_index),
-                                                         radius=0.0075, color=(
-                                    self.model.muscle_activation[muscle_start + m] / self.muscle_strengths[m], 0.2,
-                                    0.5),
-                                                         time=self.render_time)
+                        self.renderer.add_line_strip(points, name=s.muscles[m].name + str(skel_index),
+                                                        radius=0.0075, color=(
+                                self.model.muscle_activation[muscle_start + m] / self.muscle_strengths[m], 0.2,
+                                0.5),
+                                                        time=self.render_time)
 
-                        muscle_start += len(s.muscles)
+                    muscle_start += len(s.muscles)
                     skel_index += 1
 
             self.renderer.update(self.state, self.render_time)
@@ -276,9 +241,7 @@ class SNUHumanoidFullEnv(DFlexEnv):
     def step(self, actions):
         actions = actions.view((self.num_envs, self.num_actions))
 
-        actions = torch.clip(actions, -1., 1.)
-        if self.mtu_actuations:
-            actions = actions * 0.5 + 0.5
+        actions = torch.clip(actions, -1., 1.) * 0.5 + 0.5
 
         ##### an ugly fix for simulation nan values #### # reference: https://github.com/pytorch/pytorch/issues/15131
         def create_hook():
@@ -298,10 +261,7 @@ class SNUHumanoidFullEnv(DFlexEnv):
         self.actions = actions.clone()
 
         for ci in range(self.inv_control_freq):
-            if self.mtu_actuations:
-                self.model.muscle_activation = actions.view(-1) * self.muscle_strengths
-            else:
-                self.state.joint_act.view(self.num_envs, -1)[:, 6:] = actions * self.motor_scale
+            self.model.muscle_activation = actions.view(-1) * self.muscle_strengths
 
             self.state = self.integrator.forward(self.model, self.state, self.sim_dt, self.sim_substeps,
                                                  self.MM_caching_frequency)
@@ -414,16 +374,14 @@ class SNUHumanoidFullEnv(DFlexEnv):
 
     def calculateObservations(self):
         # forward kinematics
+        body_X_sc, body_X_sm = eval_rigid_fk_grad(self.model, self.state.joint_q)
+        joint_S_s, body_I_s, body_v_s, body_f_s, body_a_s = eval_rigid_id_grad(self.model, self.state.joint_q, self.state.joint_qd, body_X_sc, body_X_sm)
 
         pelvis_pos = self.state.joint_q.view(self.num_envs, -1)[:, 0:3]
         pelvis_rot = self.state.joint_q.view(self.num_envs, -1)[:, 3:7]
-        rot_quat = tu.quat_mul(pelvis_rot, self.inv_start_rot)
-        torso_pos = None
-        if self.use_full_humanoid:
-            body_X_sc, body_X_sm = eval_rigid_fk_grad(self.model, self.state.joint_q)
-            torso_pos = body_X_sc.view(self.num_envs, -1, 7)[:, self.torso_index, 0:3]
-            torso_rot = body_X_sc.view(self.num_envs, -1, 7)[:, self.torso_index - 1, 3:7]
-            rot_quat = tu.quat_mul(torso_rot, self.inv_start_rot)
+        torso_pos = body_X_sc.view(self.num_envs, -1, 7)[:, 13, 0:3]
+        torso_rot = body_X_sc.view(self.num_envs, -1, 7)[:, 12, 3:7]
+        rot_quat = tu.quat_mul(torso_rot, self.inv_start_rot)
 
         lin_vel = self.state.joint_qd.view(self.num_envs, -1)[:, 3:6]
         ang_vel = self.state.joint_qd.view(self.num_envs, -1)[:, 0:3]
@@ -438,7 +396,7 @@ class SNUHumanoidFullEnv(DFlexEnv):
         up_vec = tu.quat_rotate(rot_quat, self.basis_vec1)
         heading_vec = tu.quat_rotate(rot_quat, self.basis_vec0)
 
-        self.obs_buf = torch.cat([torso_pos[:, 1:2] if self.use_full_humanoid else pelvis_pos[:, 1:2],  # 0
+        self.obs_buf = torch.cat([torso_pos[:, 1:2],  # 0
                                   pelvis_rot,  # 1:5
                                   lin_vel,  # 5:8
                                   ang_vel,  # 8:11
@@ -465,9 +423,7 @@ class SNUHumanoidFullEnv(DFlexEnv):
 
         progress_reward = self.obs_buf[:, 5]
 
-        self.rew_buf = progress_reward + up_reward + heading_reward + act_penalty
-        if self.use_full_humanoid:
-            self.rew_buf += height_reward
+        self.rew_buf = progress_reward + up_reward + heading_reward + act_penalty + height_reward
 
         # reset agents
         self.reset_buf = torch.where(self.obs_buf[:, 0] < self.termination_height, torch.ones_like(self.reset_buf),
