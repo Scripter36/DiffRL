@@ -756,8 +756,8 @@ def load_bvh(filename, bvh_link_map: 'dict[str, int]') -> 'tuple[float, np.ndarr
             break
 
     # 2. allocate the array
-    joint_q = np.zeros((frames, 3 + 4 * max(bvh_index_map.values())))
-    joint_q_mask = np.zeros((1, 3 + 4 * max(bvh_index_map.values())))
+    joint_q = np.zeros((frames, 3 + 4 * (max(bvh_link_map.values()) + 1)))
+    joint_q_mask = np.zeros((1, 3 + 4 * (max(bvh_link_map.values()) + 1)))
 
     # 3. fill the mask array.
     joint_q_mask[0, :3] = 1.0
@@ -780,6 +780,7 @@ def load_bvh(filename, bvh_link_map: 'dict[str, int]') -> 'tuple[float, np.ndarr
         # fill the rotation data.
         for bvh_name in bvh_names:
             if bvh_name not in bvh_link_map:
+                motion_index += len(bvh_channel_map[bvh_name])
                 continue
             bvh_index = bvh_link_map[bvh_name]
             quat = df.quat_identity()

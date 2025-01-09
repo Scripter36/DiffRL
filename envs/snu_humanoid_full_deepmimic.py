@@ -265,16 +265,12 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         self.actions = actions.clone()
 
-        # for ci in range(self.inv_control_freq):
-        #     self.model.muscle_activation = actions.view(-1) * self.muscle_strengths
+        for ci in range(self.inv_control_freq):
+            self.model.muscle_activation = actions.view(-1) * self.muscle_strengths
 
-        #     self.state = self.integrator.forward(self.model, self.state, self.sim_dt, self.sim_substeps,
-        #                                          self.MM_caching_frequency)
-        #     self.sim_time += self.sim_dt
-
-        # very simple test: just copy the reference motion
-        frame_index = torch.round((self.progress_buf * self.dt) / self.reference_frame_time).long() % self.reference_joint_q.shape[0]
-        self.state.joint_q = torch.where(self.reference_joint_q_mask == 1.0, self.reference_joint_q[frame_index], self.state.joint_q)
+            self.state = self.integrator.forward(self.model, self.state, self.sim_dt, self.sim_substeps,
+                                                 self.MM_caching_frequency)
+            self.sim_time += self.sim_dt
 
         self.reset_buf = torch.zeros_like(self.reset_buf)
 
@@ -458,3 +454,59 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.reset_buf = torch.where(invalid_masks, torch.ones_like(self.reset_buf), self.reset_buf)
 
         self.rew_buf[invalid_masks] = 0.
+
+    def copy_ref_pos_to_state(self):
+        """
+        Just copy the reference motion to the state without considering the gradient.
+        This function is for debugging.
+        """
+        # very simple test: just copy the reference motion
+        # however, since the joint_q is in restricted subspace to ensure the joint constraints, we need to convert the reference motion to the restricted subspace
+        # the basis of the restricted subspace is the joint_S_s[start:start+num_dofs], which is the spatial vectors
+        # 2. project the reference motion to the restricted subspace
+        
+        frame_index = torch.round((self.progress_buf * self.dt) / self.reference_frame_time).long() % self.reference_joint_q.shape[0]
+        for i in range(self.model.articulation_count):
+            art_start = self.model.articulation_joint_start[i].item()
+            art_end = self.model.articulation_joint_start[i+1].item()
+            ref_index = 0
+            for j in range(art_start, art_end):
+                start = self.model.joint_q_start[j].item()
+                if self.model.joint_type[j] == df.JOINT_FREE:
+                    # free joint: 3 position + 4 quaternion
+                    new_joint_q = torch.zeros(7, device=self.device)
+                    new_joint_q[0:3] = self.reference_joint_q[frame_index, ref_index:ref_index+3] / 100
+                    new_joint_q[3:7] = self.reference_joint_q[frame_index, ref_index+3:ref_index+7]
+                    self.state.joint_q[start:start+7] = torch.where(self.reference_joint_q_mask[0, ref_index:ref_index+7] == 1.0, new_joint_q, self.state.joint_q[start:start+7])
+                    ref_index += 7
+                elif self.model.joint_type[j] == df.JOINT_REVOLUTE:
+                    if self.reference_joint_q_mask[0, ref_index] == 1.0:
+                        # revolute joint: 1 rotation
+                        joint_axis = self.model.joint_axis[j].detach().cpu().numpy().reshape(3)
+                        # quaternion to axis-angle
+                        quat = self.reference_joint_q[frame_index, ref_index:ref_index+4].detach().cpu().numpy().reshape(4)
+                        angle = np.arccos(np.clip(quat[3], -1.0, 1.0))
+                        if angle > 0.0:
+                            axis = quat[:3] / np.sin(angle)
+                        else:
+                            axis = np.array([1.0, 0.0, 0.0])
+                        # if axis is not in the same direction as the reference axis, then we need to flip the sign of the angle
+                        if np.dot(axis, joint_axis) < 0:
+                            angle = -angle
+                            axis = -axis
+                        # check if the axis diff is too large
+                        # print(f"Axis Difference: {np.linalg.norm(axis - joint_axis):.4f}, Quaternion: {quat}, Reference Index: {ref_index}, Computed Axis: {axis}, Joint Axis: {joint_axis}, Joint Index: {j}")
+                        self.state.joint_q[start:start+1] = torch.tensor([angle], device=self.device)
+                    ref_index += 4
+                elif self.model.joint_type[j] == df.JOINT_BALL:
+                    # ball joint: 4 quaternion
+                    self.state.joint_q[start:start+4] = torch.where(self.reference_joint_q_mask[0, ref_index:ref_index+4] == 1.0, self.reference_joint_q[frame_index, ref_index:ref_index+4], self.state.joint_q[start:start+4])
+                    ref_index += 4
+                else:
+                    print('unknown joint type:', self.model.joint_type[j])
+            assert ref_index == self.reference_joint_q.shape[1]
+
+        # update body pos
+        body_X_sc, body_X_sm = eval_rigid_fk_grad(self.model, self.state.joint_q)
+        self.state.body_X_sc = body_X_sc
+        self.state.body_X_sm = body_X_sm
