@@ -83,6 +83,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
     def init_sim(self):
         self.builder = df.ModelBuilder()
+        self.reference_builder = df.ModelBuilder()
 
         self.dt = 1.0 / 60.0
         self.sim_substeps = 48
@@ -149,6 +150,9 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
             self.skeletons.append(skeleton)
 
+            # load reference model too
+            lu.Skeleton(asset_path, None, self.reference_builder, always_ball=True)
+
         num_q = int(len(self.builder.joint_q) / self.num_environments)
         num_qd = int(len(self.builder.joint_qd) / self.num_environments)
         print(num_q, num_qd)
@@ -174,7 +178,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.start_joint_target = tu.to_torch(self.start_joint_target, device=self.device)
 
         # load reference motion
-        self.reference_frame_time, reference_joint_q, reference_joint_q_mask = lu.load_bvh(os.path.join(self.asset_folder, "motion/walk.bvh"), self.skeletons[0].bvh_map)
+        self.reference_frame_time, self.reference_frame_count, reference_joint_q, reference_joint_q_mask = lu.load_bvh(os.path.join(self.asset_folder, "motion/walk.bvh"), self.skeletons[0].bvh_map)
         self.reference_joint_q = tu.to_torch(reference_joint_q, device=self.device)
         self.reference_joint_q_mask = tu.to_torch(reference_joint_q_mask, device=self.device)
 
@@ -183,9 +187,13 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.model.ground = self.ground
         self.model.gravity = torch.tensor((0.0, -9.81, 0.0), dtype=torch.float32, device=self.device)
 
+        # reference model does not use simulation
+        self.reference_model = self.reference_builder.finalize(self.device)
+
         self.integrator = df.SemiImplicitIntegrator()
 
         self.state = self.model.state()
+        self.reference_state = self.reference_model.state()
 
         if (self.model.ground):
             self.model.collide(self.state)
@@ -265,12 +273,17 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         self.actions = actions.clone()
 
+        # simulate the model
         for ci in range(self.inv_control_freq):
             self.model.muscle_activation = actions.view(-1) * self.muscle_strengths
 
             self.state = self.integrator.forward(self.model, self.state, self.sim_dt, self.sim_substeps,
                                                  self.MM_caching_frequency)
             self.sim_time += self.sim_dt
+        
+        # update the reference model
+        with torch.no_grad():
+            self.update_reference_model()
 
         self.reset_buf = torch.zeros_like(self.reset_buf)
 
@@ -379,58 +392,64 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
     def calculateObservations(self):
         # forward kinematics
-        body_X_sc, body_X_sm = eval_rigid_fk_grad(self.model, self.state.joint_q)
-        joint_S_s, body_I_s, body_v_s, body_f_s, body_a_s = eval_rigid_id_grad(self.model, self.state.joint_q, self.state.joint_qd, body_X_sc, body_X_sm)
+        # body_X_sc, body_X_sm = eval_rigid_fk_grad(self.model, self.state.joint_q)
+        # joint_S_s, body_I_s, body_v_s, body_f_s, body_a_s = eval_rigid_id_grad(self.model, self.state.joint_q, self.state.joint_qd, body_X_sc, body_X_sm)
 
-        pelvis_pos = self.state.joint_q.view(self.num_envs, -1)[:, 0:3]
-        pelvis_rot = self.state.joint_q.view(self.num_envs, -1)[:, 3:7]
-        torso_pos = body_X_sc.view(self.num_envs, -1, 7)[:, 13, 0:3]
-        torso_rot = body_X_sc.view(self.num_envs, -1, 7)[:, 12, 3:7]
-        rot_quat = tu.quat_mul(torso_rot, self.inv_start_rot)
+        # add root pos, root rot, and torso pos.
+        root_pos = self.state.joint_q.view(self.num_envs, -1)[:, 0:3]
+        root_rot = self.state.joint_q.view(self.num_envs, -1)[:, 3:7]
+        torso_pos = self.state.body_X_sc.view(self.num_envs, -1, 7)[:, 13, 0:3]
+        torso_rot = self.state.body_X_sc.view(self.num_envs, -1, 7)[:, 12, 3:7]
 
-        lin_vel = self.state.joint_qd.view(self.num_envs, -1)[:, 3:6]
-        ang_vel = self.state.joint_qd.view(self.num_envs, -1)[:, 0:3]
-        # convert the linear velocity of the torso from twist representation to the velocity of the center of mass in world frame
-        lin_vel = lin_vel - torch.cross(pelvis_pos, ang_vel, dim=-1)
+        # DeepMimic states (observations): each link's position and rotation relative to the root joint, phase of the motion
+        # 1. compute relative position
+        relative_body_X_sc = self.state.body_X_sc.view(self.num_envs, -1, 7).clone()
+        relative_body_X_sc[:, :, 0:3] = relative_body_X_sc[:, :, 0:3] - relative_body_X_sc[:, 0, 0:3].reshape(self.num_envs, 1, 3)
+        # 2. compute relative rotation
+        root_rots = tu.quat_conjugate(relative_body_X_sc[:, 0, 3:7]).unsqueeze(1).repeat(1, relative_body_X_sc.shape[1], 1)
+        relative_body_X_sc[:, :, 3:7] = tu.quat_mul(root_rots, relative_body_X_sc[:, :, 3:7])
+        # 3. compute phase of the motion
+        progress_time = self.progress_buf * self.dt
+        max_time = self.reference_frame_time * self.reference_joint_q.shape[0]
+        phase = (progress_time / max_time) % 1.0
 
-        to_target = self.targets + self.start_pos - pelvis_pos
-        to_target[:, 1] = 0.0
+        # 4. calculate the center of mass position, expressed in the local frame
+        # TODO: validation required.
+        relative_body_X_sm = self.state.body_X_sm.view(self.num_envs, -1, 7).clone()
+        relative_body_X_sm[:, :, 0:3] = relative_body_X_sm[:, :, 0:3] - root_pos.reshape(self.num_envs, 1, 3)
 
-        target_dirs = tu.normalize(to_target)
+        mass = torch.diagonal(self.model.body_I_m.view(self.num_envs, -1, 3, 3), dim1=-2, dim2=-1)
+        com_pos = torch.sum(mass * relative_body_X_sm[:, :, 0:3], dim=1) / torch.sum(mass, dim=1)
 
-        up_vec = tu.quat_rotate(rot_quat, self.basis_vec1)
-        heading_vec = tu.quat_rotate(rot_quat, self.basis_vec0)
-
-        self.obs_buf = torch.cat([torso_pos[:, 1:2],  # 0
-                                  pelvis_rot,  # 1:5
-                                  lin_vel,  # 5:8
-                                  ang_vel,  # 8:11
-                                  self.state.joint_q.view(self.num_envs, -1)[:, 7:],  # 11:33
-                                  self.joint_vel_obs_scaling * self.state.joint_qd.view(self.num_envs, -1)[:, 6:],
-                                  # 33:51
-                                  up_vec[:, 1:2],  # 51
-                                  (heading_vec * target_dirs).sum(dim=-1).unsqueeze(-1), # 52
-                                  ],
-                                 dim=-1)
+        # TODO: check if we can add phase (which is not differentiable) in observations
+        self.obs_buf = torch.cat([
+            root_pos.view(self.num_envs, -1),
+            root_rot.view(self.num_envs, -1),
+            torso_pos.view(self.num_envs, -1),
+            torso_rot.view(self.num_envs, -1),
+            com_pos.view(self.num_envs, -1),
+            relative_body_X_sc.view(self.num_envs, -1),
+            phase.view(self.num_envs, 1),
+        ], dim=-1)
 
     def calculateReward(self):
-        up_reward = 0.1 * self.obs_buf[:, -2]  # 51
-        heading_reward = self.obs_buf[:, -1]  # 52
+        # up_reward = 0.1 * self.obs_buf[:, -2]  # 51
+        # heading_reward = self.obs_buf[:, -1]  # 52
 
-        height_diff = self.obs_buf[:, 0] - self.termination_height
-        height_reward = torch.clip(height_diff, -1.0, self.termination_tolerance)
-        height_reward = torch.where(height_reward < 0.0, -200.0 * height_reward * height_reward,
-                                    height_reward)  # JIE: not smooth
-        height_reward = torch.where(height_reward > 0.0, self.height_rew_scale * height_reward, height_reward)
+        # height_diff = self.obs_buf[:, 0] - self.termination_height
+        # height_reward = torch.clip(height_diff, -1.0, self.termination_tolerance)
+        # height_reward = torch.where(height_reward < 0.0, -200.0 * height_reward * height_reward,
+        #                             height_reward)  # JIE: not smooth
+        # height_reward = torch.where(height_reward > 0.0, self.height_rew_scale * height_reward, height_reward)
 
-        act_penalty = torch.sum(torch.abs(self.actions),
-                                dim=-1) * self.action_penalty  # torch.sum(self.actions ** 2, dim = -1) * self.action_penalty
+        # DeepMimic reward: pose reward + velocity reward + end-effector reward + center-of-mass reward
 
-        progress_reward = self.obs_buf[:, 5]
+        # act_penalty = torch.sum(torch.abs(self.actions),
+        #                         dim=-1) * self.action_penalty  # torch.sum(self.actions ** 2, dim = -1) * self.action_penalty
 
-        self.rew_buf = progress_reward + up_reward + heading_reward + act_penalty + height_reward
+        self.rew_buf = 0
 
-        # reset agents
+        # reset agents (early termination)
         self.reset_buf = torch.where(self.obs_buf[:, 0] < self.termination_height, torch.ones_like(self.reset_buf),
                                      self.reset_buf)
         self.reset_buf = torch.where(self.progress_buf > self.episode_length - 1, torch.ones_like(self.reset_buf),
@@ -455,6 +474,33 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         self.rew_buf[invalid_masks] = 0.
 
+    def update_reference_model(self):
+        """
+        Update the reference model's state from the phase of the motion.
+        """
+        frame_index = torch.round((self.progress_buf * self.dt) / self.reference_frame_time).long() % self.reference_frame_count
+        next_state = self.reference_model.state()
+
+        # update joint_q
+        next_state.joint_q = self.reference_joint_q[frame_index, self.reference_joint_q_mask[frame_index] == 1.0]
+
+        # update joint_qd
+        next_state.joint_qd[0:3] = (next_state.joint_q[0:3] - self.reference_state.joint_q[0:3]) / self.dt
+        next_state.joint_qd[3:] = 2 * tu.quat_diff(next_state.joint_q[3:7], self.reference_state.joint_q[3:7]) / self.dt
+
+        # perform forward kinematics
+        body_X_sc, body_X_sm = eval_rigid_fk_grad(self.reference_model, next_state.joint_q)
+        next_state.body_X_sc = body_X_sc
+        next_state.body_X_sm = body_X_sm
+        joint_S_s, body_I_s, body_v_s, body_f_s, body_a_s = eval_rigid_id_grad(self.reference_model, next_state.joint_q, next_state.joint_qd, body_X_sc, body_X_sm)
+        next_state.joint_S_s = joint_S_s
+        next_state.body_I_s = body_I_s
+        next_state.body_v_s = body_v_s
+        next_state.body_f_s = body_f_s
+        next_state.body_a_s = body_a_s
+        
+        self.reference_state = next_state
+
     def copy_ref_pos_to_state(self):
         """
         Just copy the reference motion to the state without considering the gradient.
@@ -475,8 +521,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
                 if self.model.joint_type[j] == df.JOINT_FREE:
                     # free joint: 3 position + 4 quaternion
                     new_joint_q = torch.zeros(7, device=self.device)
-                    new_joint_q[0:3] = self.reference_joint_q[frame_index, ref_index:ref_index+3] / 100
-                    new_joint_q[3:7] = self.reference_joint_q[frame_index, ref_index+3:ref_index+7]
+                    new_joint_q[0:7] = self.reference_joint_q[frame_index, ref_index:ref_index+7]
                     self.state.joint_q[start:start+7] = torch.where(self.reference_joint_q_mask[0, ref_index:ref_index+7] == 1.0, new_joint_q, self.state.joint_q[start:start+7])
                     ref_index += 7
                 elif self.model.joint_type[j] == df.JOINT_REVOLUTE:

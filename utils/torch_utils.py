@@ -51,7 +51,6 @@ def quat_mul(a, b):
 
     return quat
 
-
 @torch.jit.script
 def normalize(x, eps: float = 1e-9):
     return x / x.norm(p=2, dim=-1).clamp(min=eps, max=None).unsqueeze(-1)
@@ -120,6 +119,14 @@ def quat_from_angle_axis(angle, axis):
     w = theta.cos()
     return quat_unit(torch.cat([xyz, w], dim=-1))
 
+# assuming q is unit quaternion
+@torch.jit.script
+def quat_log(q):
+    return q[:, :3] * torch.arccos(torch.clamp(q[:, 3], min=-1.0, max=1.0))
+
+@torch.jit.script
+def quat_diff(q1, q2):
+    return quat_log(quat_mul(quat_conjugate(q2), q1))
 
 @torch.jit.script
 def normalize_angle(x):

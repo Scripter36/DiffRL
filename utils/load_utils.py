@@ -512,7 +512,8 @@ class Skeleton:
         contact_mu=0.5,
         limit_ke=1000.0,
         limit_kd=10.0,
-        armature = 0.05):
+        armature = 0.05,
+        always_ball = False):
 
         if filter is None:
             filter = {}
@@ -531,6 +532,8 @@ class Skeleton:
         self.contact_mu = contact_mu
 
         self.visualize_shapes = visualize_shapes
+
+        self.always_ball = always_ball
 
         self.parse_skeleton(skeleton_file, builder, filter)
 
@@ -600,6 +603,8 @@ class Skeleton:
                 joint_t_s = np.fromstring(joint_xform.attrib["translation"], sep=" ")
             
                 joint_type = type_map[joint.attrib["type"]]
+                if self.always_ball and joint_type != df.JOINT_FREE:
+                    joint_type = df.JOINT_BALL
 
                 joint_lower = -1.e+3
                 joint_upper = 1.e+3
@@ -613,7 +618,7 @@ class Skeleton:
                 
                     # print(joint_type, joint_lower, joint_upper)
 
-                if ("axis" in joint.attrib):
+                if ("axis" in joint.attrib) and not self.always_ball:
                     joint_axis = np.fromstring(joint.attrib["axis"], sep=" ")
                 else:
                     joint_axis = np.array((0.0, 0.0, 0.0))
@@ -728,32 +733,73 @@ class Skeleton:
 # Below is a bvh parser to load motion data.
 # for dflex compatibility, we will convert the motion data to a format that can be used by dflex state.
 # joint_q is a 1D array of joint angles in quaternion format, with the first 3 elements being the position and the last are the rotation.
-def load_bvh(filename, bvh_link_map: 'dict[str, int]') -> 'tuple[float, np.ndarray, np.ndarray]':
+def load_bvh(filename, bvh_link_map: 'dict[str, int]') -> 'tuple[float, int, np.ndarray, np.ndarray]':
     # 1. load skeleton structure, and map the bvh joint names to indices.
-    # we do not need to load the offset, and ignore the end effector.
     with open(filename, 'r') as file:
         lines = file.readlines()
 
     bvh_index_map = {} # { bvh_name: index }
     bvh_names = [] # [ bvh_name, ... ]
     bvh_channel_map = {} # { bvh_name: [ channel_name, ... ] }
-    
+    bvh_xform_map = {} # { bvh_name: df.transform }
+    ref_model_link_map = {} # { bvh_name: link_index }
     index = 0
-    motion_start_index = -1
-    for i, line in enumerate(lines):
-        line = line.strip()
-        if line.startswith("ROOT") or line.startswith("JOINT"):
-            bvh_name = line.split()[1]
-            bvh_index_map[bvh_name] = index
-            bvh_names.append(bvh_name)
-            index += 1
-        elif line.startswith("CHANNELS"):
-            bvh_channel_map[bvh_names[index - 1]] = line.split()[2:]
-        elif line.startswith("MOTION"):
-            frames = int(lines[i + 1].split()[1])
-            frame_time = float(lines[i + 2].split()[2])
-            motion_start_index = i + 3
-            break
+    def load_joint(parent_name):
+        # name
+        line = lines.pop(0).strip()
+        joint_type, name = line.split()[0], line.split()[1]
+        nonlocal index
+        bvh_index_map[name] = index
+        index += 1
+        bvh_names.append(name)
+
+        # open brace
+        line = lines.pop(0).strip()
+        assert line == "{", "Expected open brace."
+
+        # offset
+        line = lines.pop(0).strip()
+        offset = np.fromstring(' '.join(line.split()[1:]), sep=" ", dtype=np.float32)
+
+        # channels
+        line = lines[0].strip()
+        if line.startswith("CHANNELS"):
+            bvh_channel_map[name] = line.split()[2:]
+            lines.pop(0)
+        else:
+            bvh_channel_map[name] = []
+
+        # make xfrom
+        local_xform = df.transform(offset, df.quat_identity())
+        parent_xform = bvh_xform_map.get(parent_name, df.transform_identity())
+        xform = df.transform_multiply(parent_xform, local_xform)
+        bvh_xform_map[name] = xform
+
+        # add link, assume that the joint is a ball joint.
+        # link must be added if it is used in the model (bvh_link_map)
+        # if name in bvh_link_map:
+        #     parent_link = ref_model_link_map.get(parent_name, -1)
+        #     joint_type = df.JOINT_BALL if joint_type == "JOINT" else df.JOINT_FREE
+        #     print(f"add_link {name} {parent_name} {joint_type}")
+        #     ref_model_link_map[name] = builder.add_link(parent=parent_link, X_pj=xform, type=joint_type, axis=[0.0, 0.0, 0.0])
+
+        # recurse
+        while not lines[0].strip().startswith("}"):
+            load_joint(name)
+
+        # close brace
+        line = lines.pop(0).strip()
+        assert line == "}", "Expected close brace."
+
+    lines.pop(0) # HIERARCHY
+    # builder.add_articulation()
+    load_joint(None)
+    
+    lines.pop(0) # MOTION
+    line = lines.pop(0).strip() # Frames: x
+    frames = int(line.split()[1])
+    line = lines.pop(0).strip() # Frame Time: x
+    frame_time = float(line.split()[2])
 
     # 2. allocate the array
     joint_q = np.zeros((frames, 3 + 4 * (max(bvh_link_map.values()) + 1)))
@@ -770,12 +816,12 @@ def load_bvh(filename, bvh_link_map: 'dict[str, int]') -> 'tuple[float, np.ndarr
     assert bvh_channel_map[bvh_names[0]][:3] == ["Xposition", "Yposition", "Zposition"], "The first 3 channels must be position x, y, z."
 
     for frame in range(frames):
-        motion_line = lines[motion_start_index + frame]
+        motion_line = lines.pop(0).strip()
         motion_data = np.fromstring(motion_line, sep=" ")
         motion_index = 0
 
         # fill the position data.
-        joint_q[frame, :3] = motion_data[:3]
+        joint_q[frame, :3] = motion_data[:3] / 100.0
 
         # fill the rotation data.
         for bvh_name in bvh_names:
@@ -795,4 +841,4 @@ def load_bvh(filename, bvh_link_map: 'dict[str, int]') -> 'tuple[float, np.ndarr
             joint_q[frame, 3 + 4 * bvh_index: 3 + 4 * (bvh_index + 1)] = quat
     
     # 4. return the frame time and joint_q array.
-    return frame_time, joint_q, joint_q_mask
+    return frame_time, frames, joint_q, joint_q_mask
