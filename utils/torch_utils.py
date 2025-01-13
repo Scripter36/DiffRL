@@ -122,7 +122,7 @@ def quat_from_angle_axis(angle, axis):
 # assuming q is unit quaternion
 @torch.jit.script
 def quat_log(q):
-    return q[:, :3] * torch.arccos(torch.clamp(q[:, 3], min=-1.0, max=1.0))
+    return q[:, :3] * torch.arccos(torch.clamp(q[:, 3:4], min=-1.0, max=1.0))
 
 @torch.jit.script
 def quat_diff(q1, q2):

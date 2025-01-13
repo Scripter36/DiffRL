@@ -42,7 +42,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.num_joint_q = 71
         self.num_joint_qd = 56
         self.num_muscles = 284
-        num_obs = 127
+        num_obs = 179
 
         self.skeletons = []
         self.muscle_strengths = []
@@ -187,6 +187,50 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.model.ground = self.ground
         self.model.gravity = torch.tensor((0.0, -9.81, 0.0), dtype=torch.float32, device=self.device)
 
+        # cache indices to calculate qd later
+        self.q_normal_diff_indices = []
+        self.q_quat_diff_indices = []
+        self.qd_normal_diff_indices = []
+        self.qd_quat_diff_indices = []
+        for i in range(len(self.model.joint_q_start) - 1):
+            joint_q_start = self.model.joint_q_start[i].item()
+            joint_q_end = self.model.joint_q_start[i+1].item()
+            joint_qd_start = self.model.joint_qd_start[i].item()
+            joint_qd_end = self.model.joint_qd_start[i+1].item()
+            joint_q_len = joint_q_end - joint_q_start
+            if joint_q_len == 1: # revolute / prismatic joint
+                self.q_normal_diff_indices.append(joint_q_start)
+                self.qd_normal_diff_indices.append(joint_qd_start)
+            elif joint_q_len == 4: # ball joint
+                self.q_quat_diff_indices.append(joint_q_start)
+                self.q_quat_diff_indices.append(joint_q_start + 1)
+                self.q_quat_diff_indices.append(joint_q_start + 2)
+                self.q_quat_diff_indices.append(joint_q_start + 3)
+                self.qd_quat_diff_indices.append(joint_qd_start)
+                self.qd_quat_diff_indices.append(joint_qd_start + 1)
+                self.qd_quat_diff_indices.append(joint_qd_start + 2)
+            elif joint_q_len == 7: # ball joint
+                self.q_normal_diff_indices.append(joint_q_start)
+                self.q_normal_diff_indices.append(joint_q_start + 1)
+                self.q_normal_diff_indices.append(joint_q_start + 2)
+                self.q_quat_diff_indices.append(joint_q_start + 3)
+                self.q_quat_diff_indices.append(joint_q_start + 4)
+                self.q_quat_diff_indices.append(joint_q_start + 5)
+                self.q_quat_diff_indices.append(joint_q_start + 6)
+                self.qd_quat_diff_indices.append(joint_qd_start + 0)
+                self.qd_quat_diff_indices.append(joint_qd_start + 1)
+                self.qd_quat_diff_indices.append(joint_qd_start + 2)
+                self.qd_normal_diff_indices.append(joint_qd_start + 3)
+                self.qd_normal_diff_indices.append(joint_qd_start + 4)
+                self.qd_normal_diff_indices.append(joint_qd_start + 5)
+            else:
+                raise ValueError(f"Invalid joint length: {joint_q_len}")
+        
+        self.q_normal_diff_indices = tu.to_torch(self.q_normal_diff_indices, device=self.device, dtype=torch.long)
+        self.q_quat_diff_indices = tu.to_torch(self.q_quat_diff_indices, device=self.device, dtype=torch.long)
+        self.qd_normal_diff_indices = tu.to_torch(self.qd_normal_diff_indices, device=self.device, dtype=torch.long)
+        self.qd_quat_diff_indices = tu.to_torch(self.qd_quat_diff_indices, device=self.device, dtype=torch.long)
+
         # reference model does not use simulation
         self.reference_model = self.reference_builder.finalize(self.device)
 
@@ -272,6 +316,9 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         #################################################
 
         self.actions = actions.clone()
+
+        # debug: copy the pos
+        # self.copy_ref_pos_to_state()
 
         # simulate the model
         for ci in range(self.inv_control_freq):
@@ -418,8 +465,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         relative_body_X_sm = self.state.body_X_sm.view(self.num_envs, -1, 7).clone()
         relative_body_X_sm[:, :, 0:3] = relative_body_X_sm[:, :, 0:3] - root_pos.reshape(self.num_envs, 1, 3)
 
-        mass = torch.diagonal(self.model.body_I_m.view(self.num_envs, -1, 3, 3), dim1=-2, dim2=-1)
-        com_pos = torch.sum(mass * relative_body_X_sm[:, :, 0:3], dim=1) / torch.sum(mass, dim=1)
+        mass = self.model.body_I_m.view(self.num_envs, -1, 6, 6)[:, :, 3, 3]
+        com_pos = torch.sum(mass.unsqueeze(-1) * relative_body_X_sm[:, :, 0:3], dim=1) / torch.sum(mass, dim=1).unsqueeze(-1)
 
         # TODO: check if we can add phase (which is not differentiable) in observations
         self.obs_buf = torch.cat([
@@ -447,7 +494,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # act_penalty = torch.sum(torch.abs(self.actions),
         #                         dim=-1) * self.action_penalty  # torch.sum(self.actions ** 2, dim = -1) * self.action_penalty
 
-        self.rew_buf = 0
+        self.rew_buf[:] = 0.0
 
         # reset agents (early termination)
         self.reset_buf = torch.where(self.obs_buf[:, 0] < self.termination_height, torch.ones_like(self.reset_buf),
@@ -472,7 +519,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         self.reset_buf = torch.where(invalid_masks, torch.ones_like(self.reset_buf), self.reset_buf)
 
-        self.rew_buf[invalid_masks] = 0.
+        self.rew_buf[invalid_masks] = 0.0
 
     def update_reference_model(self):
         """
@@ -481,12 +528,12 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         frame_index = torch.round((self.progress_buf * self.dt) / self.reference_frame_time).long() % self.reference_frame_count
         next_state = self.reference_model.state()
 
-        # update joint_q
-        next_state.joint_q = self.reference_joint_q[frame_index, self.reference_joint_q_mask[frame_index] == 1.0]
+        # update joint_q - copy from frame_index (shape=(num_envs)), and use the mask to select valid values
+        next_state.joint_q = torch.where((self.reference_joint_q_mask[0, :] == 1.0).unsqueeze(0).repeat(self.num_envs, 1), self.reference_joint_q[frame_index, :], next_state.joint_q.view(self.num_envs, -1)).view(-1)
 
-        # update joint_qd
-        next_state.joint_qd[0:3] = (next_state.joint_q[0:3] - self.reference_state.joint_q[0:3]) / self.dt
-        next_state.joint_qd[3:] = 2 * tu.quat_diff(next_state.joint_q[3:7], self.reference_state.joint_q[3:7]) / self.dt
+        # update joint_qd from joint_q - use diff for revolute joint angle and free joint pos, quat_diff for ball joint and free joint quat
+        next_state.joint_qd[self.qd_normal_diff_indices] = (next_state.joint_q[self.q_normal_diff_indices] - self.reference_state.joint_q[self.q_normal_diff_indices]) / self.dt
+        next_state.joint_qd[self.qd_quat_diff_indices] = (2 * tu.quat_diff(next_state.joint_q[self.q_quat_diff_indices].view(-1, 4), self.reference_state.joint_q[self.q_quat_diff_indices].view(-1, 4)) / self.dt).view(-1)
 
         # perform forward kinematics
         body_X_sc, body_X_sm = eval_rigid_fk_grad(self.reference_model, next_state.joint_q)
@@ -540,7 +587,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
                             angle = -angle
                             axis = -axis
                         # check if the axis diff is too large
-                        # print(f"Axis Difference: {np.linalg.norm(axis - joint_axis):.4f}, Quaternion: {quat}, Reference Index: {ref_index}, Computed Axis: {axis}, Joint Axis: {joint_axis}, Joint Index: {j}")
+                        print(f"Axis Diff: {np.linalg.norm(axis-joint_axis):.4f}, Q: {quat}, RefIdx: {ref_index}, Axis: {axis}, JAxis: {joint_axis}, JIdx: {j}")
                         self.state.joint_q[start:start+1] = torch.tensor([angle], device=self.device)
                     ref_index += 4
                 elif self.model.joint_type[j] == df.JOINT_BALL:
