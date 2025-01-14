@@ -230,6 +230,10 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.q_quat_diff_indices = tu.to_torch(self.q_quat_diff_indices, device=self.device, dtype=torch.long)
         self.qd_normal_diff_indices = tu.to_torch(self.qd_normal_diff_indices, device=self.device, dtype=torch.long)
         self.qd_quat_diff_indices = tu.to_torch(self.qd_quat_diff_indices, device=self.device, dtype=torch.long)
+            
+        # end effector indices
+        self.end_effector_indices = [4, 9, 14, 18, 22] # FootThumbR, FootThumbL, Head, HandR, HandL
+        self.end_effector_indices = tu.to_torch(self.end_effector_indices, device=self.device, dtype=torch.long)
 
         # reference model does not use simulation
         self.reference_model = self.reference_builder.finalize(self.device)
@@ -284,6 +288,44 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
                     muscle_start += len(s.muscles)
                     skel_index += 1
+
+                # add the observations and reference poses
+                # relative reference pos
+                ref_root_transform = self.reference_state.joint_q.view(self.num_envs, -1)[:, 0:7]
+                ref_relative_body_X_sc = self.to_local_frame_spatial(self.reference_state.body_X_sc.view(self.num_envs, -1, 7).clone(), ref_root_transform).view(-1, 7)
+                for s in self.skeletons:
+                    for mesh, link in s.mesh_map.items():
+
+                        if link != -1:
+                            link_transform = ref_relative_body_X_sc[link]
+                            link_transform[1] += 2
+                            X_sc = df.transform_expand(link_transform.tolist())
+
+                            mesh_path = os.path.join(self.asset_folder, "OBJ/" + mesh + ".usd")
+
+                            self.renderer.add_mesh(f'{mesh}_relative_refpos', mesh_path, X_sc, 1.0, self.render_time)
+                # relative
+                relative_body_X_sc = self.obs_buf[0, 17:-1].view(-1, 7)
+                for s in self.skeletons:
+                    for mesh, link in s.mesh_map.items():
+
+                        if link != -1:
+                            link_transform = relative_body_X_sc[link]
+                            link_transform[1] += 2
+                            X_sc = df.transform_expand(link_transform.tolist())
+
+                            mesh_path = os.path.join(self.asset_folder, "OBJ/" + mesh + ".usd")
+
+                            self.renderer.add_mesh(f'{mesh}_relative', mesh_path, X_sc, 1.0, self.render_time)
+
+
+                # Phase: add a sphere to move [10, phase, 10]
+                self.renderer.add_sphere((10, self.obs_buf[0, -1], 10), 0.1, "phase", self.render_time)
+
+                # com_pos_local: add sphere
+                com_pos_local = self.obs_buf[0, 14:17].view(-1)
+                com_pos_local[1] += 2
+                self.renderer.add_sphere(com_pos_local.tolist(), 0.1, "com", self.render_time)
 
             self.renderer.update(self.state, self.render_time)
 
@@ -436,6 +478,66 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         checkpoint['progress_buf'] = self.progress_buf.clone()
 
         return checkpoint
+    
+    def inv_transform(self, transform):
+        pos = transform[:, 0:3].clone()
+        pos[:, 1] = 0
+        rot = transform[:, 3:7].clone()
+        forward = tu.quat_apply(rot, torch.tensor([1.0, 0.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1))
+        rot = tu.quat_from_angle_axis(torch.atan2(-forward[:, 2], forward[:, 0]), torch.tensor([0.0, 1.0, 0.0], device=self.device).unsqueeze(0).repeat(self.num_envs, 1))
+
+        inv_pos = -pos
+        inv_rot = tu.quat_conjugate(rot)
+        return torch.cat([inv_pos, inv_rot], dim=-1)
+
+    def to_local_frame_spatial(self, spatial_transforms, local_transform):
+        """
+        spatial_transforms: (num_envs, transform_count, 7)
+        local_transform: (num_envs, 7)
+        """
+        transform_count = spatial_transforms.shape[1]
+        inv_local_transform = self.inv_transform(local_transform)
+        inv_pos = inv_local_transform[:, 0:3].unsqueeze(1).repeat(1, transform_count, 1)
+        inv_rot = inv_local_transform[:, 3:7].unsqueeze(1).repeat(1, transform_count, 1)
+
+        spatial_transforms[:, :, 0:3] = tu.quat_apply(inv_rot, spatial_transforms[:, :, 0:3] + inv_pos)
+        spatial_transforms[:, :, 3:7] = tu.quat_mul(inv_rot, spatial_transforms[:, :, 3:7])
+
+        return spatial_transforms
+    
+    def to_local_frame_pos(self, positions, local_transform):
+        """
+        positions: (num_envs, transform_count, 3)
+        local_transform: (num_envs, 7)
+        """
+        transform_count = positions.shape[1]
+        inv_local_transform = self.inv_transform(local_transform)
+        inv_pos = inv_local_transform[:, 0:3].unsqueeze(1).repeat(1, transform_count, 1)
+        inv_rot = inv_local_transform[:, 3:7].unsqueeze(1).repeat(1, transform_count, 1)
+
+        return tu.quat_apply(inv_rot, positions + inv_pos)
+    
+    def to_local_frame_w(self, w, local_transform):
+        """
+        w: (num_envs, transform_count, 3)
+        local_transform: (num_envs, 7)
+        """
+        transform_count = w.shape[1]
+        inv_local_transform = self.inv_transform(local_transform)
+        inv_pos = inv_local_transform[:, 0:3].unsqueeze(1).repeat(1, transform_count, 1)
+        inv_rot = inv_local_transform[:, 3:7].unsqueeze(1).repeat(1, transform_count, 1)
+
+        return tu.quat_apply(inv_rot, w)
+    
+    def get_center_of_mass(self, model, state):
+        """
+        model: the model
+        state: the state
+        return: the center of mass position in the local frame (num_envs, 3)
+        """
+        mass = model.body_I_m.view(self.num_envs, -1, 6, 6)[:, :, 3, 3]
+        com_pos = torch.sum(mass.unsqueeze(-1) * state.body_X_sm.view(self.num_envs, -1, 7)[:, :, 0:3], dim=1) / torch.sum(mass, dim=1).unsqueeze(-1)
+        return com_pos
 
     def calculateObservations(self):
         # forward kinematics
@@ -443,38 +545,32 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # joint_S_s, body_I_s, body_v_s, body_f_s, body_a_s = eval_rigid_id_grad(self.model, self.state.joint_q, self.state.joint_qd, body_X_sc, body_X_sm)
 
         # add root pos, root rot, and torso pos.
-        root_pos = self.state.joint_q.view(self.num_envs, -1)[:, 0:3]
-        root_rot = self.state.joint_q.view(self.num_envs, -1)[:, 3:7]
+        root_transform = self.state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
+        root_pos = root_transform[:, 0:3]
+        root_rot = root_transform[:, 3:7]
         torso_pos = self.state.body_X_sc.view(self.num_envs, -1, 7)[:, 13, 0:3]
         torso_rot = self.state.body_X_sc.view(self.num_envs, -1, 7)[:, 12, 3:7]
 
         # DeepMimic states (observations): each link's position and rotation relative to the root joint, phase of the motion
-        # 1. compute relative position
-        relative_body_X_sc = self.state.body_X_sc.view(self.num_envs, -1, 7).clone()
-        relative_body_X_sc[:, :, 0:3] = relative_body_X_sc[:, :, 0:3] - relative_body_X_sc[:, 0, 0:3].reshape(self.num_envs, 1, 3)
-        # 2. compute relative rotation
-        root_rots = tu.quat_conjugate(relative_body_X_sc[:, 0, 3:7]).unsqueeze(1).repeat(1, relative_body_X_sc.shape[1], 1)
-        relative_body_X_sc[:, :, 3:7] = tu.quat_mul(root_rots, relative_body_X_sc[:, :, 3:7])
-        # 3. compute phase of the motion
+        # 1. compute relative body X_sc
+        relative_body_X_sc = self.to_local_frame_spatial(self.state.body_X_sc.view(self.num_envs, -1, 7).clone(), root_transform)
+    
+        # 2. compute phase of the motion
         progress_time = self.progress_buf * self.dt
-        max_time = self.reference_frame_time * self.reference_joint_q.shape[0]
+        max_time = self.reference_frame_time * self.reference_frame_count
         phase = (progress_time / max_time) % 1.0
 
-        # 4. calculate the center of mass position, expressed in the local frame
-        # TODO: validation required.
-        relative_body_X_sm = self.state.body_X_sm.view(self.num_envs, -1, 7).clone()
-        relative_body_X_sm[:, :, 0:3] = relative_body_X_sm[:, :, 0:3] - root_pos.reshape(self.num_envs, 1, 3)
-
-        mass = self.model.body_I_m.view(self.num_envs, -1, 6, 6)[:, :, 3, 3]
-        com_pos = torch.sum(mass.unsqueeze(-1) * relative_body_X_sm[:, :, 0:3], dim=1) / torch.sum(mass, dim=1).unsqueeze(-1)
+        # 3. calculate the center of mass position, expressed in the local frame
+        com_pos = self.get_center_of_mass(self.model, self.state)
+        com_pos_local = self.to_local_frame_pos(com_pos.view(self.num_envs, 1, 3), root_transform)
 
         # TODO: check if we can add phase (which is not differentiable) in observations
         self.obs_buf = torch.cat([
-            root_pos.view(self.num_envs, -1),
-            root_rot.view(self.num_envs, -1),
-            torso_pos.view(self.num_envs, -1),
-            torso_rot.view(self.num_envs, -1),
-            com_pos.view(self.num_envs, -1),
+            root_pos.view(self.num_envs, -1), # 0:3
+            root_rot.view(self.num_envs, -1), # 3:7
+            torso_pos.view(self.num_envs, -1), # 7:10
+            torso_rot.view(self.num_envs, -1), # 10:14
+            com_pos_local.view(self.num_envs, -1), # 14:17
             relative_body_X_sc.view(self.num_envs, -1),
             phase.view(self.num_envs, 1),
         ], dim=-1)
@@ -491,13 +587,48 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         # DeepMimic reward: pose reward + velocity reward + end-effector reward + center-of-mass reward
 
-        # act_penalty = torch.sum(torch.abs(self.actions),
-        #                         dim=-1) * self.action_penalty  # torch.sum(self.actions ** 2, dim = -1) * self.action_penalty
+        w_p = 0.65
+        w_v = 0.1
+        w_e = 0.15
+        w_c = 0.1
 
-        self.rew_buf[:] = 0.0
+        # relative body X_sc for reference state
+        relative_body_X_sc = self.obs_buf[:, 17:-1].view(self.num_envs, -1, 7)
+        ref_root_transform = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
+        ref_relative_body_X_sc = self.to_local_frame_spatial(self.reference_state.body_X_sc.view(self.num_envs, -1, 7).clone(), ref_root_transform)
+
+        # relative angular velocities
+        # relative_body_w = self.to_local_frame_w(self.state.body_v_s.view(self.num_envs, -1, 6)[:, :, 3:6].clone(), ref_root_transform)
+        # ref_relative_body_w = self.to_local_frame_w(self.reference_state.body_v_s.view(self.num_envs, -1, 6)[:, :, 3:6].clone(), ref_root_transform)
+
+        # pos reward: exp(-2 * sum(body quat, ref body quat diff **2))
+        body_quat = relative_body_X_sc[:, :, 3:7]
+        ref_body_quat = ref_relative_body_X_sc[:, :, 3:7]
+        body_quat_diff = tu.quat_diff(body_quat, ref_body_quat)
+        pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
+
+        # velocity reward: exp(-0.1 * sum(body w, ref body w diff **2))
+        # body_w_diff = relative_body_w - ref_relative_body_w
+        # vel_reward = torch.exp(-0.1 * torch.sum(torch.sum(body_w_diff ** 2, dim=-1), dim=-1))
+
+        # end-effector reward: exp(-40 * sum(end-effector pos, ref end-effector pos diff **2))
+        # end_effector_pos = relative_body_X_sc[:, self.end_effector_indices, 0:3]
+        # ref_end_effector_pos = ref_relative_body_X_sc[:, self.end_effector_indices, 0:3]
+        # end_effector_pos_diff = end_effector_pos - ref_end_effector_pos
+        # end_effector_reward = torch.exp(-40 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
+
+        # # center-of-mass reward: exp(-10 * sum(com pos, ref com pos diff **2))
+        # com_pos_local = self.obs_buf[:, 14:17]
+        # ref_com_pos = self.get_center_of_mass(self.model, self.reference_state)
+        # ref_root_transform = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
+        # ref_com_pos_local = self.to_local_frame_pos(ref_com_pos.view(self.num_envs, 1, 3), ref_root_transform).view(self.num_envs, -1)
+        # com_pos_diff = com_pos_local - ref_com_pos_local
+        # com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
+
+        self.rew_buf = pos_reward.clone()
 
         # reset agents (early termination)
-        self.reset_buf = torch.where(self.obs_buf[:, 0] < self.termination_height, torch.ones_like(self.reset_buf),
+        self.reset_buf = torch.where(self.obs_buf[:, 1] < self.termination_height, torch.ones_like(self.reset_buf),
                                      self.reset_buf)
         self.reset_buf = torch.where(self.progress_buf > self.episode_length - 1, torch.ones_like(self.reset_buf),
                                      self.reset_buf)
@@ -525,6 +656,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         """
         Update the reference model's state from the phase of the motion.
         """
+        
         frame_index = torch.round((self.progress_buf * self.dt) / self.reference_frame_time).long() % self.reference_frame_count
         next_state = self.reference_model.state()
 
