@@ -401,7 +401,6 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         if env_ids is not None:
             # copy the reference motion to the state
             self.copy_ref_pos_to_state(env_ids)
-            self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] = 0.0
 
             # randomization
             if self.stochastic_init:
@@ -532,45 +531,73 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         # DeepMimic reward: pose reward + velocity reward + end-effector reward + center-of-mass reward
 
-        w_p = 0.65
-        w_v = 0.1
-        w_e = 0.15
-        w_c = 0.1
+        reward_type = 'deepmimic'
 
-        # relative body X_sc for reference state
-        relative_body_X_sc = self.obs_buf[:, 25:-1].view(self.num_envs, -1, 7)
-        ref_root_transform = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
-        ref_relative_body_X_sc = tu.to_local_frame_spatial(self.reference_state.body_X_sc.view(self.num_envs, -1, 7).clone(), ref_root_transform)
+        if reward_type == 'deepmimic':
+            w_p = 0.65
+            w_v = 0.1
+            w_e = 0.15
+            w_c = 0.1
 
-        # relative angular velocities
-        # relative_body_w = tu.to_local_frame_w(self.state.body_v_s.view(self.num_envs, -1, 6)[:, :, 3:6].clone(), ref_root_transform)
-        # ref_relative_body_w = tu.to_local_frame_w(self.reference_state.body_v_s.view(self.num_envs, -1, 6)[:, :, 3:6].clone(), ref_root_transform)
+            # relative body X_sc for reference state
+            relative_body_X_sc = self.obs_buf[:, 25:-1].view(self.num_envs, -1, 7)
+            ref_root_transform = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
+            ref_relative_body_X_sc = tu.to_local_frame_spatial(self.reference_state.body_X_sc.view(self.num_envs, -1, 7).clone(), ref_root_transform)
 
-        # pos reward: exp(-2 * sum(body quat, ref body quat diff **2))
-        body_quat = relative_body_X_sc[:, :, 3:7]
-        ref_body_quat = ref_relative_body_X_sc[:, :, 3:7]
-        body_quat_diff = tu.quat_diff(body_quat, ref_body_quat)
-        pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
+            # pos reward: exp(-2 * sum(body quat, ref body quat diff **2))
+            body_quat = relative_body_X_sc[:, :, 3:7]
+            ref_body_quat = ref_relative_body_X_sc[:, :, 3:7]
+            body_quat_diff = tu.quat_diff(body_quat, ref_body_quat)
+            pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
 
-        # velocity reward: exp(-0.1 * sum(body w, ref body w diff **2))
-        # body_w_diff = relative_body_w - ref_relative_body_w
-        # vel_reward = torch.exp(-0.1 * torch.sum(torch.sum(body_w_diff ** 2, dim=-1), dim=-1))
+            # velocity reward: exp(-0.1 * sum(body w, ref body w diff **2))
+            body_w_diff = self.state.body_v_s.view(self.num_envs, -1, 6)[:, :, 3:6] - self.reference_state.body_v_s.view(self.num_envs, -1, 6)[:, :, 3:6]
+            vel_reward = torch.exp(-0.1 * torch.sum(torch.sum(body_w_diff ** 2, dim=-1), dim=-1))
 
-        # end-effector reward: exp(-40 * sum(end-effector pos, ref end-effector pos diff **2))
-        # end_effector_pos = relative_body_X_sc[:, self.end_effector_indices, 0:3]
-        # ref_end_effector_pos = ref_relative_body_X_sc[:, self.end_effector_indices, 0:3]
-        # end_effector_pos_diff = end_effector_pos - ref_end_effector_pos
-        # end_effector_reward = torch.exp(-40 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
+            # end-effector reward: exp(-40 * sum(end-effector pos, ref end-effector pos diff **2))
+            end_effector_pos = relative_body_X_sc[:, self.end_effector_indices, 0:3]
+            ref_end_effector_pos = ref_relative_body_X_sc[:, self.end_effector_indices, 0:3]
+            end_effector_pos_diff = end_effector_pos - ref_end_effector_pos
+            end_effector_reward = torch.exp(-40 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
 
-        # # center-of-mass reward: exp(-10 * sum(com pos, ref com pos diff **2))
-        # com_pos_local = self.obs_buf[:, 14:17]
-        # ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
-        # ref_root_transform = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
-        # ref_com_pos_local = tu.to_local_frame_pos(ref_com_pos.view(self.num_envs, 1, 3), ref_root_transform).view(self.num_envs, -1)
-        # com_pos_diff = com_pos_local - ref_com_pos_local
-        # com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
+            # center-of-mass reward: exp(-10 * sum(com pos, ref com pos diff **2))
+            com_pos_local = self.obs_buf[:, 14:17]
+            ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
+            ref_root_transform = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
+            ref_com_pos_local = tu.to_local_frame_pos(ref_com_pos.view(self.num_envs, 1, 3), ref_root_transform).view(self.num_envs, -1)
+            com_pos_diff = com_pos_local - ref_com_pos_local
+            com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
 
-        imitation_reward = w_p * pos_reward# + w_v * vel_reward + w_e * end_effector_reward + w_c * com_reward
+            imitation_reward = w_p * pos_reward + w_v * vel_reward + w_e * end_effector_reward + w_c * com_reward
+
+        elif reward_type == 'diffmimic':
+            # use DiffMimic reward: pos + rot + vel + ang
+            w_pos = 1
+            w_rot = 0.5
+            w_vel = 0.01
+            w_ang = 0.01
+
+            # relative body X_sc for reference state
+            relative_body_X_sc = self.obs_buf[:, 25:-1].view(self.num_envs, -1, 7)
+            ref_root_transform = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
+            ref_relative_body_X_sc = tu.to_local_frame_spatial(self.reference_state.body_X_sc.view(self.num_envs, -1, 7).clone(), ref_root_transform)
+
+            body_pos_diff = relative_body_X_sc[:, :, 0:3] - ref_relative_body_X_sc[:, :, 0:3]
+            pos_reward = -torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1)
+
+            body_rot_diff = tu.quat_diff(relative_body_X_sc[:, :, 3:7], ref_relative_body_X_sc[:, :, 3:7])
+            rot_reward = -torch.mean(torch.sum(body_rot_diff ** 2, dim=-1), dim=-1)
+
+            body_vel_diff = relative_body_X_sc[:, :, 10:13] - ref_relative_body_X_sc[:, :, 10:13]
+            vel_reward = -torch.mean(torch.sum(body_vel_diff ** 2, dim=-1), dim=-1)
+            
+            body_ang_vel_diff = relative_body_X_sc[:, :, 13:16] - ref_relative_body_X_sc[:, :, 13:16]
+            ang_vel_reward = -torch.mean(torch.sum(body_ang_vel_diff ** 2, dim=-1), dim=-1)
+
+            imitation_reward = w_pos * pos_reward + w_rot * rot_reward + w_vel * vel_reward + w_ang * ang_vel_reward + 1.0
+
+        else:
+            imitation_reward = 0.0
 
         # goal reward
         up_reward = 0.1 * self.obs_buf[:, 23]
@@ -589,14 +616,22 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         goal_reward = up_reward + heading_reward + height_reward + progress_reward
 
-        w_g = 0.07
-        w_i = 0.93
+        w_g = 0.1
+        w_i = 0.9
 
-        self.rew_buf = w_i * imitation_reward + w_g * goal_reward
+        # print the mean reward
+        # print(f"mean imitation reward: {torch.mean(imitation_reward).item()}, mean goal reward: {torch.mean(goal_reward).item()}")
+
+        self.rew_buf = w_i * imitation_reward + w_g * goal_reward + act_penalty
 
         # reset agents (early termination)
-        self.reset_buf = torch.where(self.obs_buf[:, 8] < self.termination_height, torch.ones_like(self.reset_buf),
-                                     self.reset_buf)
+        if reward_type == 'deepmimic':
+            self.reset_buf = torch.where(self.obs_buf[:, 8] < self.termination_height, torch.ones_like(self.reset_buf),
+                                        self.reset_buf)
+        elif reward_type == 'diffmimic':
+            # if pos reward is less than -1, reset
+            self.reset_buf = torch.where(pos_reward < -0.4, torch.ones_like(self.reset_buf),
+                                        self.reset_buf)
         self.reset_buf = torch.where(self.progress_buf > self.episode_length - 1, torch.ones_like(self.reset_buf),
                                      self.reset_buf)
 
@@ -704,6 +739,15 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         frame_index = torch.round((self.progress_buf * self.dt) / self.reference_frame_time).long() % self.reference_joint_q.shape[0]
         self.state.joint_q.view(self.num_envs, -1)[env_ids, :] = self.converted_ref_joint_q[frame_index[env_ids], :]
+
+        # reset position
+        self.state.joint_q.view(self.num_envs, -1)[env_ids, 0] = 0.0
+        self.state.joint_q.view(self.num_envs, -1)[env_ids, 1] = 1.0
+        self.state.joint_q.view(self.num_envs, -1)[env_ids, 2] = 0.0
+        # self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_from_angle_axis(torch.tensor([math.pi * 0.5]).to(self.device), self.y_unit_tensor)
+
+        # reset velocity
+        self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] = 0.0
 
         # update body pos
         # body_X_sc, body_X_sm = eval_rigid_fk_grad(self.model, self.state.joint_q)

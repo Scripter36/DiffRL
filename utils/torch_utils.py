@@ -182,34 +182,14 @@ def get_basis_vector(q, v):
     return quat_rotate(q, v)
 
 @torch.jit.script
-def tf_inverse_xz(transform):
-    """
-    Invert the transform, but only consider the xz transform and yaw rotation.
-    transform: (num_envs, 7)
-    return: (num_envs, 7)
-    """
-    num_envs = transform.shape[0]
-    pos = transform[:, 0:3].clone()
-    pos[:, 1] = 0
-    rot = transform[:, 3:7].clone()
-    forward = quat_apply(rot, torch.tensor([1.0, 0.0, 0.0], device=transform.device).unsqueeze(0).repeat(num_envs, 1))
-    rot = quat_from_angle_axis(torch.atan2(-forward[:, 2], forward[:, 0]), torch.tensor([0.0, 1.0, 0.0], device=transform.device).unsqueeze(0).repeat(num_envs, 1))
-    inv_pos = -pos
-    inv_rot = quat_conjugate(rot)
-    return torch.cat([inv_pos, inv_rot], dim=-1)
-
-@torch.jit.script
 def to_local_frame_spatial(spatial_transforms, local_transform):
     """
     spatial_transforms: (num_envs, transform_count, 7)
     local_transform: (num_envs, 7)
     """
     transform_count = spatial_transforms.shape[1]
-    inv_local_transform = tf_inverse_xz(local_transform)
-    inv_pos = inv_local_transform[:, 0:3].unsqueeze(1).repeat(1, transform_count, 1)
-    inv_rot = inv_local_transform[:, 3:7].unsqueeze(1).repeat(1, transform_count, 1)
-    spatial_transforms[:, :, 0:3] = quat_apply(inv_rot, spatial_transforms[:, :, 0:3] + inv_pos)
-    spatial_transforms[:, :, 3:7] = quat_mul(inv_rot, spatial_transforms[:, :, 3:7])
+    inv_pos = local_transform[:, 0:3].unsqueeze(1).repeat(1, transform_count, 1)
+    spatial_transforms[:, :, 0:3] = spatial_transforms[:, :, 0:3] - inv_pos
     return spatial_transforms
 
 @torch.jit.script
@@ -219,22 +199,20 @@ def to_local_frame_pos(positions, local_transform):
     local_transform: (num_envs, 7)
     """
     transform_count = positions.shape[1]
-    inv_local_transform = tf_inverse_xz(local_transform)
-    inv_pos = inv_local_transform[:, 0:3].unsqueeze(1).repeat(1, transform_count, 1)
-    inv_rot = inv_local_transform[:, 3:7].unsqueeze(1).repeat(1, transform_count, 1)
-    return quat_apply(inv_rot, positions + inv_pos)
+    inv_pos = local_transform[:, 0:3].unsqueeze(1).repeat(1, transform_count, 1)
+    return positions - inv_pos
 
-@torch.jit.script
-def to_local_frame_w(w, local_transform):
-    """
-    w: (num_envs, transform_count, 3)
-    local_transform: (num_envs, 7)
-    """
-    transform_count = w.shape[1]
-    inv_local_transform = tf_inverse_xz(local_transform)
-    inv_pos = inv_local_transform[:, 0:3].unsqueeze(1).repeat(1, transform_count, 1)
-    inv_rot = inv_local_transform[:, 3:7].unsqueeze(1).repeat(1, transform_count, 1)
-    return quat_apply(inv_rot, w)
+# @torch.jit.script
+# def to_local_frame_w(w, local_transform):
+#     """
+#     w: (num_envs, transform_count, 3)
+#     local_transform: (num_envs, 7)
+#     """
+#     transform_count = w.shape[1]
+#     inv_local_transform = tf_inverse_xz(local_transform)
+#     inv_pos = inv_local_transform[:, 0:3].unsqueeze(1).repeat(1, transform_count, 1)
+#     inv_rot = inv_local_transform[:, 3:7].unsqueeze(1).repeat(1, transform_count, 1)
+#     return quat_apply(inv_rot, w)
 
 @torch.jit.script
 def get_center_of_mass(body_I_m, body_X_sm):

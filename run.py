@@ -31,14 +31,14 @@ def prompt_choice(options, message):
 
 config_path = Path("examples/cfg/shac")
 logs_path = Path("examples/logs")
-do_render = True
 
 def main():
     while True:
         print(f"{YELLOW}Select an option:{RESET}")  # Yellow text for headers
         print("1) Train")  # White (default) text for options
         print("2) Render")  # White (default) text for options
-        choice = input(f"{YELLOW}Enter your choice (1/2): {RESET}").strip()  # Yellow text for input prompt
+        print("3) Play")  # White (default) text for options
+        choice = input(f"{YELLOW}Enter your choice (1/2/3): {RESET}").strip()  # Yellow text for input prompt
 
         if choice == "1":
             # Training mode
@@ -93,12 +93,46 @@ def main():
 
             print(f"{YELLOW}Running rendering for environment: {selected_env_name}{RESET}")  # Yellow text for status messages
             # Print command in white (default)
-            if do_render:
-                print(f"python examples/train_shac.py --cfg {config_path}/{selected_env_name}.yaml --checkpoint {selected_policy} --play --render")
-                subprocess.run([sys.executable, "examples/train_shac.py", "--cfg", config_path / f"{selected_env_name}.yaml", "--checkpoint", selected_policy, "--play", "--render"])
-            else:
-                print(f"python examples/train_shac.py --cfg {config_path}/{selected_env_name}.yaml --checkpoint {selected_policy} --play")
-                subprocess.run([sys.executable, "examples/train_shac.py", "--cfg", config_path / f"{selected_env_name}.yaml", "--checkpoint", selected_policy, "--play"])
+            print(f"python examples/train_shac.py --cfg {config_path}/{selected_env_name}.yaml --checkpoint {selected_policy} --play --render")
+            subprocess.run([sys.executable, "examples/train_shac.py", "--cfg", config_path / f"{selected_env_name}.yaml", "--checkpoint", selected_policy, "--play", "--render"])
+            break
+
+        elif choice == "3":
+            # Play mode
+            print(f"{YELLOW}Play mode selected.{RESET}")  # Yellow text for status messages
+            
+            env_dirs = list_items(logs_path, None)
+            if not env_dirs:
+                print(f"{YELLOW}No environments found.{RESET}")  # Yellow text for errors
+                sys.exit(1)
+
+            selected_env = prompt_choice(env_dirs, "Select an environment by number")
+            selected_env_name = selected_env.name
+
+            # Move into the "shac" subdirectory
+            shac_path = selected_env / "shac"
+            if not shac_path.exists():
+                print(f"{YELLOW}No 'shac' directory found for {selected_env_name}.{RESET}")  # Yellow text for errors
+                sys.exit(1)
+
+            date_dirs = list_items(shac_path, None)
+            if not date_dirs:
+                print(f"{YELLOW}No dates found for the selected environment.{RESET}")  # Yellow text for errors
+                sys.exit(1)
+
+            selected_date = prompt_choice(date_dirs, "Select a date by number")
+
+            policy_files = list_items(selected_date, ".pt")
+            if not policy_files:
+                print(f"{YELLOW}No policy files (*.pt) found for the selected date.{RESET}")  # Yellow text for errors
+                sys.exit(1)
+
+            selected_policy = prompt_choice(policy_files, "Select a policy by number")
+
+            print(f"{YELLOW}Running play for environment: {selected_env_name}{RESET}")  # Yellow text for status messages
+            # Print command in white (default)
+            print(f"python examples/train_shac.py --cfg {config_path}/{selected_env_name}.yaml --checkpoint {selected_policy} --play")
+            subprocess.run([sys.executable, "examples/train_shac.py", "--cfg", config_path / f"{selected_env_name}.yaml", "--checkpoint", selected_policy, "--play"])
             break
 
         else:
