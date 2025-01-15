@@ -89,7 +89,7 @@ def _compute_segment_xform(pos0, pos1):
 class UsdRenderer:
     """A USD renderer
     """  
-    def __init__(self, model: dflex.model.Model, stage):
+    def __init__(self, model: dflex.model.Model, stage, draw_ground=True):
         """Construct a UsdRenderer object
         
         Args:
@@ -110,12 +110,13 @@ class UsdRenderer:
         self.root = UsdGeom.Xform.Define(stage, '/root')
 
         # add sphere instancer for particles
-        self.particle_instancer = UsdGeom.PointInstancer.Define(stage, self.root.GetPath().AppendChild("particle_instancer"))
-        self.particle_instancer_sphere = UsdGeom.Sphere.Define(stage, self.particle_instancer.GetPath().AppendChild("sphere"))
-        self.particle_instancer_sphere.GetRadiusAttr().Set(model.particle_radius)
+        if (self.model.particle_count > 0):
+            self.particle_instancer = UsdGeom.PointInstancer.Define(stage, self.root.GetPath().AppendChild("particle_instancer"))
+            self.particle_instancer_sphere = UsdGeom.Sphere.Define(stage, self.particle_instancer.GetPath().AppendChild("sphere"))
+            self.particle_instancer_sphere.GetRadiusAttr().Set(model.particle_radius)
 
-        self.particle_instancer.CreatePrototypesRel().SetTargets([self.particle_instancer_sphere.GetPath()])
-        self.particle_instancer.CreateProtoIndicesAttr().Set([0] * model.particle_count)
+            self.particle_instancer.CreatePrototypesRel().SetTargets([self.particle_instancer_sphere.GetPath()])
+            self.particle_instancer.CreateProtoIndicesAttr().Set([0] * model.particle_count)
 
         # add line instancer
         if (self.model.spring_count > 0):
@@ -171,7 +172,7 @@ class UsdRenderer:
             self.cloth_mesh = None
 
         # built-in ground plane
-        if (model.ground):
+        if (model.ground and draw_ground):
 
             size = 10.0
 
@@ -280,7 +281,7 @@ class UsdRenderer:
             pass
 
         # convert to list
-        if self.model.particle_count:
+        if self.model.particle_count > 0:
 
             particle_q = state.particle_q.tolist()
             particle_orientations = [Gf.Quath(1.0, 0.0, 0.0, 0.0)] * self.model.particle_count

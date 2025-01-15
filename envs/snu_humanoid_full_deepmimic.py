@@ -73,12 +73,9 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # -----------------------
         # set up Usd renderer
         if (self.visualize):
-            self.stage = Usd.Stage.CreateNew("outputs/" + "HumanoidSNUDeepMimic_" + str(self.num_envs) + ".usd")
+            self.stage = Usd.Stage.CreateInMemory("HumanoidSNUDeepMimic_" + str(self.num_envs) + ".usd")
 
             self.renderer = df.UsdRenderer(self.model, self.stage)
-            self.renderer.draw_points = True
-            self.renderer.draw_springs = True
-            self.renderer.draw_shapes = True
             self.render_time = 0.0
 
     def init_sim(self):
@@ -326,13 +323,13 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
             self.renderer.update(self.state, self.render_time)
 
-            if (self.num_frames == 1):
-                try:
-                    self.stage.Save()
-                except:
-                    print("USD save error")
-
-                self.num_frames -= 1
+    def finalize_play(self):
+        if self.visualize:
+            try:
+                self.stage.GetRootLayer().Export("outputs/HumanoidSNUDeepMimic_" + str(self.num_envs) + ".usd")
+                print(f"Saved to outputs/HumanoidSNUDeepMimic_{self.num_envs}.usd")
+            except Exception as e:
+                print(f"USD save error: {e}")
 
     def step(self, actions):
         actions = actions.view((self.num_envs, self.num_actions))

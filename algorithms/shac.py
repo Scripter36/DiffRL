@@ -9,6 +9,7 @@ from multiprocessing.sharedctypes import Value
 import sys, os
 
 from torch.nn.utils.clip_grad import clip_grad_norm_
+from tqdm import tqdm
 
 project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.append(project_dir)
@@ -312,32 +313,48 @@ class SHAC:
         obs = self.env.reset()
 
         games_cnt = 0
+        game_bar = tqdm(total=num_games, desc='Running games', position=0)
         while games_cnt < num_games:
-            if self.obs_rms is not None:
-                obs = self.obs_rms.normalize(obs)
+            env_bars = [tqdm(total=self.env.episode_length, desc='Evaluating policy', position=i+1) for i in range(self.num_envs)]
+            while True:
+                if self.obs_rms is not None:
+                    obs = self.obs_rms.normalize(obs)
 
-            actions = self.actor(obs, deterministic = deterministic)
+                actions = self.actor(obs, deterministic = deterministic)
 
-            obs, rew, done, _ = self.env.step(torch.tanh(actions))
+                obs, rew, done, _ = self.env.step(torch.tanh(actions))
 
-            episode_length += 1
+                episode_length += 1
+                for env_bar in env_bars:
+                    env_bar.update(1)
 
-            done_env_ids = done.nonzero(as_tuple = False).squeeze(-1)
+                done_env_ids = done.nonzero(as_tuple = False).squeeze(-1)
 
-            episode_loss -= rew
-            episode_discounted_loss -= episode_gamma * rew
-            episode_gamma *= self.gamma
-            if len(done_env_ids) > 0:
-                for done_env_id in done_env_ids:
-                    print('loss = {:.2f}, len = {}'.format(episode_loss[done_env_id].item(), episode_length[done_env_id]))
-                    episode_loss_his.append(episode_loss[done_env_id].item())
-                    episode_discounted_loss_his.append(episode_discounted_loss[done_env_id].item())
-                    episode_length_his.append(episode_length[done_env_id].item())
-                    episode_loss[done_env_id] = 0.
-                    episode_discounted_loss[done_env_id] = 0.
-                    episode_length[done_env_id] = 0
-                    episode_gamma[done_env_id] = 1.
-                    games_cnt += 1
+                episode_loss -= rew
+                episode_discounted_loss -= episode_gamma * rew
+                episode_gamma *= self.gamma
+                
+                if len(done_env_ids) > 0:
+                    break
+            
+            for done_env_id in done_env_ids:
+                print('loss = {:.2f}, len = {}'.format(episode_loss[done_env_id].item(), episode_length[done_env_id]))
+                episode_loss_his.append(episode_loss[done_env_id].item())
+                episode_discounted_loss_his.append(episode_discounted_loss[done_env_id].item())
+                episode_length_his.append(episode_length[done_env_id].item())
+                episode_loss[done_env_id] = 0.
+                episode_discounted_loss[done_env_id] = 0.
+                episode_length[done_env_id] = 0
+                episode_gamma[done_env_id] = 1.
+                games_cnt += 1
+                game_bar.update(1)
+                env_bars[done_env_id].close()
+                env_bars[done_env_id] = tqdm(total=self.env.episode_length, desc='Evaluating policy', position=done_env_id+1)
+        game_bar.close()
+
+        # if env has 'finalize_play' method, call it
+        if hasattr(self.env, 'finalize_play'):
+            self.env.finalize_play()
         
         mean_episode_length = np.mean(np.array(episode_length_his))
         mean_policy_loss = np.mean(np.array(episode_loss_his))
