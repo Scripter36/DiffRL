@@ -284,7 +284,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         ##### an ugly fix for simulation nan values #### # reference: https://github.com/pytorch/pytorch/issues/15131
         def create_hook():
             def hook(grad):
-                torch.nan_to_num(grad, 0.0, 0.0, 0.0, out=grad)
+                if grad is not None:
+                    torch.nan_to_num(grad, 0.0, 0.0, 0.0, out=grad)
 
             return hook
 
@@ -639,6 +640,6 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # reset position
         self.state.joint_q.view(self.num_envs, -1)[env_ids, 0] = 0.0
         # ground height correction
-        self.state.joint_q.view(self.num_envs, -1)[env_ids, 1] -= 0.1
+        self.state.joint_q.view(self.num_envs, -1)[env_ids, 1] = 1.0
         self.state.joint_q.view(self.num_envs, -1)[env_ids, 2] = 0.0
         self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_from_angle_axis(torch.tensor([math.pi * 0.5]).repeat(len(env_ids)).to(self.device), torch.tensor([0.0, 1.0, 0.0]).view(1, -1).repeat(len(env_ids), 1).to(self.device))

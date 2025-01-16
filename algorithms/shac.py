@@ -174,7 +174,8 @@ class SHAC:
         gamma = torch.ones(self.num_envs, dtype = torch.float32, device = self.device)
         next_values = torch.zeros((self.steps_num + 1, self.num_envs), dtype = torch.float32, device = self.device)
         
-        actor_loss = torch.tensor(0., dtype = torch.float32, device = self.device)
+        # actor_loss = torch.tensor(0., dtype = torch.float32, device = self.device)
+        actor_loss_per_env = torch.zeros(self.num_envs, dtype = torch.float32, device = self.device)
 
         with torch.no_grad():
             if self.obs_rms is not None:
@@ -248,10 +249,12 @@ class SHAC:
             rew_acc[i + 1, :] = rew_acc[i, :] + gamma * rew
 
             if i < self.steps_num - 1:
-                actor_loss = actor_loss + (- rew_acc[i + 1, done_env_ids] - self.gamma * gamma[done_env_ids] * next_values[i + 1, done_env_ids]).sum()
+                # actor_loss = actor_loss + (- rew_acc[i + 1, done_env_ids] - self.gamma * gamma[done_env_ids] * next_values[i + 1, done_env_ids]).sum()
+                actor_loss_per_env[done_env_ids] += - rew_acc[i + 1, done_env_ids] - self.gamma * gamma[done_env_ids] * next_values[i + 1, done_env_ids]
             else:
                 # terminate all envs at the end of optimization iteration
-                actor_loss = actor_loss + (- rew_acc[i + 1, :] - self.gamma * gamma * next_values[i + 1, :]).sum()
+                # actor_loss = actor_loss + (- rew_acc[i + 1, :] - self.gamma * gamma * next_values[i + 1, :]).sum()
+                actor_loss_per_env[:] += - rew_acc[i + 1, :] - self.gamma * gamma * next_values[i + 1, :]
         
             # compute gamma for next step
             gamma = gamma * self.gamma
@@ -291,16 +294,18 @@ class SHAC:
                         self.episode_length[done_env_id] = 0
                         self.episode_gamma[done_env_id] = 1.
 
-        actor_loss /= self.steps_num * self.num_envs
+        # actor_loss /= self.steps_num * self.num_envs
+        actor_loss_per_env /= self.steps_num
 
         if self.ret_rms is not None:
-            actor_loss = actor_loss * torch.sqrt(ret_var + 1e-6)
+            # actor_loss = actor_loss * torch.sqrt(ret_var + 1e-6)
+            actor_loss_per_env = actor_loss_per_env * torch.sqrt(ret_var + 1e-6)
             
-        self.actor_loss = actor_loss.detach().cpu().item()
+        self.actor_loss = torch.mean(actor_loss_per_env).detach().cpu().item()
             
         self.step_count += self.steps_num * self.num_envs
 
-        return actor_loss
+        return actor_loss_per_env
     
     @torch.no_grad()
     def evaluate_policy(self, num_games, deterministic = False):
@@ -424,11 +429,45 @@ class SHAC:
             self.time_report.start_timer("compute actor loss")
 
             self.time_report.start_timer("forward simulation")
-            actor_loss = self.compute_actor_loss()
+            actor_loss_per_env = self.compute_actor_loss()
             self.time_report.end_timer("forward simulation")
 
             self.time_report.start_timer("backward simulation")
-            actor_loss.backward()
+            # calculate time to compute grad and grad_per_env
+            # time_start_grad = time.time()
+            # grad = torch.autograd.grad(actor_loss, self.actor.parameters(), retain_graph=True)
+            # time_end_grad = time.time()
+            # print('time to compute grad: {:.2f}s'.format(time_end_grad - time_start_grad))
+            # time_start_grad_per_env = time.time()
+            parameters = list(self.actor.parameters())
+            final_grads = []
+            self.valid_env_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
+            for i in range(self.num_envs):
+                grads = torch.autograd.grad(actor_loss_per_env[i], parameters, retain_graph=True)
+                grad_norm = torch.sqrt(sum([torch.sum(g ** 2) for g in grads]))
+                if torch.isnan(grad_norm) or grad_norm > 1000000.:
+                    continue
+                self.valid_env_mask[i] = True
+
+                if len(final_grads) == 0:
+                    final_grads = grads
+                else:
+                    for g1, g2 in zip(final_grads, grads):
+                        g1 += g2
+
+            valid_envs = self.valid_env_mask.sum()
+            for p, g in zip(parameters, final_grads):
+                p.grad = g / valid_envs
+
+            if valid_envs == 0:
+                print('all envs are invalid.')
+                raise ValueError
+
+            if valid_envs != self.num_envs:
+                print(f'truncated {self.num_envs - valid_envs} envs. invalid envs: {(~self.valid_env_mask).nonzero()}')
+            # time_end_grad_per_env = time.time()
+            # print('time to compute grad_per_env: {:.2f}s'.format(time_end_grad_per_env - time_start_grad_per_env))
             self.time_report.end_timer("backward simulation")
 
             with torch.no_grad():
@@ -438,18 +477,13 @@ class SHAC:
                 self.grad_norm_after_clip = tu.grad_norm(self.actor.parameters()) 
                 
                 # sanity check
-                if torch.isnan(self.grad_norm_before_clip) or self.grad_norm_before_clip > 1000000.:
-                    print('NaN gradient. grad norm before clip = {:.2f}'.format(self.grad_norm_before_clip))
-                    raise ValueError
-
-                # instead, make it zero if it is NaN or inf
-                # for param in self.actor.parameters():
-                #     if torch.isnan(param.grad).sum() > 0 or torch.isinf(param.grad).sum() > 0:
-                #         param.grad.zero_()
+                # if torch.isnan(self.grad_norm_before_clip) or self.grad_norm_before_clip > 1000000.:
+                #     print('NaN gradient. grad norm before clip = {:.2f}'.format(self.grad_norm_before_clip))
+                #     raise ValueError
 
             self.time_report.end_timer("compute actor loss")
 
-            return actor_loss
+            return torch.mean(actor_loss_per_env)
 
         # main training process
         for epoch in range(self.max_epochs):
@@ -477,7 +511,7 @@ class SHAC:
             self.time_report.start_timer("prepare critic dataset")
             with torch.no_grad():
                 self.compute_target_values()
-                dataset = CriticDataset(self.batch_size, self.obs_buf, self.target_values, drop_last = False)
+                dataset = CriticDataset(self.batch_size, self.obs_buf, self.target_values, drop_last = False, valid_env_mask = self.valid_env_mask)
             self.time_report.end_timer("prepare critic dataset")
 
             self.time_report.start_timer("critic training")
