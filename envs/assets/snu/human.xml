@@ -118,7 +118,7 @@
         <Body type="Box" mass="2.0" size="0.1129 0.1144 0.1166" contact="Off" color="0.6 0.6 1.5 1.0" obj="Skull.obj">
             <Transformation linear="1.0 0.0 0.0 0.0 0.9895 -0.1447 0.0 0.1447 0.9895 " translation="0.0 1.6527 -0.0123 "/>
         </Body>
-        <Joint type="Ball" lower="-0.4 -0.4 -0.4 " upper="0.6 0.6 1.5 ">
+        <Joint type="Ball" bvh="Character1_Head" lower="-0.4 -0.4 -0.4 " upper="0.6 0.6 1.5 ">
             <Transformation linear="1.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 1.0" translation="0. 1.5652 -0.0086 "/>
         </Joint>
     </Node>

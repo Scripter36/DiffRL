@@ -15,7 +15,7 @@ import random
 import xml.etree.ElementTree as ET
 
 import dflex as df
-
+import utils.torch_utils as tu
 
 def set_np_formatting():
     np.set_printoptions(edgeitems=30, infstr='inf',
@@ -732,8 +732,7 @@ class Skeleton:
 
 # Below is a bvh parser to load motion data.
 # for dflex compatibility, we will convert the motion data to a format that can be used by dflex state.
-# joint_q is a 1D array of joint angles in quaternion format, with the first 3 elements being the position and the last are the rotation.
-def load_bvh(filename, bvh_link_map: 'dict[str, int]') -> 'tuple[float, int, np.ndarray, np.ndarray]':
+def load_bvh(filename, bvh_link_map: 'dict[str, int]', model: df.Model, dt: float, pos_scale: float = 0.01) -> 'tuple[float, int, torch.Tensor, torch.Tensor]':
     # 1. load skeleton structure, and map the bvh joint names to indices.
     with open(filename, 'r') as file:
         lines = file.readlines()
@@ -775,14 +774,6 @@ def load_bvh(filename, bvh_link_map: 'dict[str, int]') -> 'tuple[float, int, np.
         xform = df.transform_multiply(parent_xform, local_xform)
         bvh_xform_map[name] = xform
 
-        # add link, assume that the joint is a ball joint.
-        # link must be added if it is used in the model (bvh_link_map)
-        # if name in bvh_link_map:
-        #     parent_link = ref_model_link_map.get(parent_name, -1)
-        #     joint_type = df.JOINT_BALL if joint_type == "JOINT" else df.JOINT_FREE
-        #     print(f"add_link {name} {parent_name} {joint_type}")
-        #     ref_model_link_map[name] = builder.add_link(parent=parent_link, X_pj=xform, type=joint_type, axis=[0.0, 0.0, 0.0])
-
         # recurse
         while not lines[0].strip().startswith("}"):
             load_joint(name)
@@ -802,43 +793,88 @@ def load_bvh(filename, bvh_link_map: 'dict[str, int]') -> 'tuple[float, int, np.
     frame_time = float(line.split()[2])
 
     # 2. allocate the array
-    joint_q = np.zeros((frames, 3 + 4 * (max(bvh_link_map.values()) + 1)))
-    joint_q_mask = np.zeros((1, 3 + 4 * (max(bvh_link_map.values()) + 1)))
+    device = model.joint_q.device
+    num_joints = model.articulation_joint_start[1].item()
+    joint_q = torch.zeros((frames, model.joint_q_start[num_joints]), device=device)
+    joint_qd = torch.zeros((frames, model.joint_qd_start[num_joints]), device=device)
+    joint_q_mask = torch.zeros((1, model.joint_q_start[num_joints]), device=device)
+    joint_xforms = torch.zeros((frames, num_joints, 7), device=device) # (pos, quat)
 
     # 3. fill the mask array.
-    joint_q_mask[0, :3] = 1.0
-    for bvh_name in bvh_names:
-        if bvh_name in bvh_link_map:
-            joint_q_mask[0, 3 + 4 * bvh_link_map[bvh_name]: 3 + 4 * (bvh_link_map[bvh_name] + 1)] = 1.0
+    valid_indices = torch.tensor(list(bvh_link_map.values()))
+    for i in range(len(valid_indices)):
+        joint_q_mask[0, model.joint_q_start[valid_indices[i]]:model.joint_q_start[valid_indices[i] + 1]] = 1.0
 
-    # 4. load motion data, and fill the joint_q array.
-    # assume that the first 3 channels are position x, y, z.
-    assert bvh_channel_map[bvh_names[0]][:3] == ["Xposition", "Yposition", "Zposition"], "The first 3 channels must be position x, y, z."
-
+    # 4. load motion data, and fill the joint_xforms array.
     for frame in range(frames):
         motion_line = lines.pop(0).strip()
         motion_data = np.fromstring(motion_line, sep=" ")
         motion_index = 0
 
-        # fill the position data.
-        joint_q[frame, :3] = motion_data[:3] / 100.0
-
         # fill the rotation data.
         for bvh_name in bvh_names:
-            if bvh_name not in bvh_link_map:
-                motion_index += len(bvh_channel_map[bvh_name])
-                continue
-            bvh_index = bvh_link_map[bvh_name]
             quat = df.quat_identity()
+            pos = np.zeros(3)
             for channel_index, channel in enumerate(bvh_channel_map[bvh_name]):
-                if channel == "Xrotation":
+                if channel == "Xposition":
+                    pos[0] = motion_data[motion_index + channel_index]
+                elif channel == "Yposition":
+                    pos[1] = motion_data[motion_index + channel_index]
+                elif channel == "Zposition":
+                    pos[2] = motion_data[motion_index + channel_index]
+                elif channel == "Xrotation":
                     quat = df.quat_multiply(quat, df.quat_from_axis_angle(np.array((1.0, 0.0, 0.0)), motion_data[motion_index + channel_index] * math.pi / 180.0))
                 elif channel == "Yrotation":
                     quat = df.quat_multiply(quat, df.quat_from_axis_angle(np.array((0.0, 1.0, 0.0)), motion_data[motion_index + channel_index] * math.pi / 180.0))
                 elif channel == "Zrotation":
                     quat = df.quat_multiply(quat, df.quat_from_axis_angle(np.array((0.0, 0.0, 1.0)), motion_data[motion_index + channel_index] * math.pi / 180.0))
             motion_index += len(bvh_channel_map[bvh_name])
-            joint_q[frame, 3 + 4 * bvh_index: 3 + 4 * (bvh_index + 1)] = quat
+
+            if bvh_name in bvh_link_map:
+                bvh_index = bvh_link_map[bvh_name]
+                joint_xforms[frame, bvh_index, :] = torch.tensor(np.concatenate((pos * pos_scale, quat)))
     
+    # 5. convert joint_xforms to joint_q
+    frame_indices = torch.arange(frames - 1, device=device)
+    for bvh_name in bvh_names:
+        if bvh_name in bvh_link_map:
+            bvh_index = bvh_link_map[bvh_name]
+            start = model.joint_q_start[bvh_index]
+            end = model.joint_q_start[bvh_index + 1]
+            start_qd = model.joint_qd_start[bvh_index]
+            end_qd = model.joint_qd_start[bvh_index + 1]
+            type = model.joint_type[bvh_index]
+            if type == df.JOINT_FREE:
+                joint_q[:, start:end] = joint_xforms[:, bvh_index, :]
+                # calculate qd
+                joint_qd[frame_indices + 1, start_qd:start_qd + 3] = tu.angular_velocity(joint_q[frame_indices + 1, start + 3:start + 7], joint_q[frame_indices, start + 3:start + 7]) / dt # w
+                joint_qd[frame_indices + 1, start_qd + 3:end_qd] = (joint_q[frame_indices + 1, start:start + 3] - joint_q[frame_indices, start:start + 3]) / dt # v
+            elif type == df.JOINT_BALL:
+                # only copy quat
+                joint_q[:, start:end] = joint_xforms[:, bvh_index, 3:]
+                # calculate qd
+                joint_qd[frame_indices + 1, start_qd:start_qd + 3] = tu.angular_velocity(joint_q[frame_indices + 1, start:start + 4], joint_q[frame_indices, start:start + 4]) / dt # w
+            elif type == df.JOINT_REVOLUTE:
+                joint_quat = joint_xforms[:, bvh_index, 3:]
+                # convert quaternion to angle around reference axis
+                ref_axis = model.joint_axis[bvh_index] # (3,)
+                # 1. convert quaternion to forward vector
+                ref_forward_vec = tu.quat_apply(joint_quat, torch.tensor([0.0, 0.0, 1.0], device=device).unsqueeze(0).repeat(frames, 1)) # (num_frames, 3)
+                # 2. calculate angle from ref_forward_vec and ref_axis
+                # project ref_forward_vec onto plane perpendicular to ref_axis
+                projected_vec = torch.nn.functional.normalize(ref_forward_vec - torch.sum(ref_forward_vec * ref_axis, dim=-1, keepdim=True) * ref_axis, dim=-1) # (num_frames, 3)
+                # calculate angle between projected vector and reference vector [0,0,1]
+                ref_vec = torch.tensor([0.0, 0.0, 1.0], device=device).unsqueeze(0).repeat(frames, 1)
+                projected_ref = torch.nn.functional.normalize(ref_vec - torch.sum(ref_vec * ref_axis, dim=-1, keepdim=True) * ref_axis, dim=-1)
+                # use atan2 to get signed angle
+                joint_angle = torch.atan2(
+                    torch.sum(torch.cross(projected_ref, projected_vec, dim=-1) * ref_axis, dim=-1),
+                    torch.sum(projected_ref * projected_vec, dim=-1)
+                )
+                # convert angle to joint_q
+                joint_q[:, start:end] = joint_angle.unsqueeze(-1)
+                # calculate qd
+                joint_qd[frame_indices + 1, start_qd:start_qd + 1] = (joint_q[frame_indices + 1, start:start + 1] - joint_q[frame_indices, start:start + 1]) / dt
+
     # 4. return the frame time and joint_q array.
-    return frame_time, frames, joint_q, joint_q_mask
+    return frame_time, frames, joint_q, joint_q_mask, joint_qd

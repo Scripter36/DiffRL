@@ -152,6 +152,18 @@ def quat_diff(q1, q2):
     return quat_log(quat_mul(quat_conjugate(q2), q1))
 
 @torch.jit.script
+def angular_velocity(q1, q2):
+    """
+    q1: (num_envs, 4)
+    q2: (num_envs, 4)
+    return: (num_envs, 3)
+    """
+    return 2 * torch.stack([
+        q1[:, 3]*q2[:, 0] - q1[:, 0]*q2[:, 3] - q1[:, 1]*q2[:, 2] + q1[:, 2]*q2[:, 1],
+        q1[:, 3]*q2[:, 1] - q1[:, 1]*q2[:, 3] - q1[:, 2]*q2[:, 0] + q1[:, 0]*q2[:, 2],
+        q1[:, 3]*q2[:, 2] - q1[:, 2]*q2[:, 3] - q1[:, 0]*q2[:, 1] + q1[:, 1]*q2[:, 0]], dim=-1)
+
+@torch.jit.script
 def normalize_angle(x):
     return torch.atan2(torch.sin(x), torch.cos(x))
 
