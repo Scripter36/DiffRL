@@ -102,13 +102,13 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # initialize some data used later on
         # todo - switch to z-up
         self.up_vec = self.y_unit_tensor.clone()
-        self.heading_vec = self.z_unit_tensor.clone()
+        self.heading_vec = self.x_unit_tensor.clone()
         self.inv_start_rot = tu.quat_conjugate(self.start_rotation).repeat((self.num_envs, 1))
 
         self.basis_vec0 = self.heading_vec.clone()
         self.basis_vec1 = self.up_vec.clone()
 
-        self.targets = tu.to_torch([0.0, 0.0, 10000.0], device=self.device, requires_grad=False).repeat(
+        self.targets = tu.to_torch([10000.0, 0.0, 0.0], device=self.device, requires_grad=False).repeat(
             (self.num_envs, 1))
 
         self.start_pos = []
@@ -347,20 +347,26 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         if env_ids is not None:
             # copy the reference motion to the state
             # randomize the reset start frame to learn all reference frames uniformly
-            self.progress_buf[env_ids] = torch.randint(0, self.reference_frame_count, (len(env_ids),), device=self.device)
-            self.copy_ref_pos_to_state(env_ids)
 
             # randomization
             if self.stochastic_init:
+                self.progress_buf[env_ids] = 0
+                self.copy_ref_pos_to_state(env_ids)
+                # start pos randomization
                 self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] = self.state.joint_q.view(self.num_envs, -1)[
                                                                            env_ids, 0:3] + 0.05 * (torch.rand(
-                    size=(len(env_ids), 3), device=self.device) - 0.5) * 2.
+                    size=(len(env_ids), 3), device=self.device) - 0.5) + torch.tensor([0.0, 0.025, 0.0], device=self.device).unsqueeze(0).repeat(len(env_ids), 1)
+                # start rot randomization
                 angle = (torch.rand(len(env_ids), device=self.device) - 0.5) * np.pi / 36.0
                 axis = torch.nn.functional.normalize(torch.rand((len(env_ids), 3), device=self.device) - 0.5)
                 self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_mul(
                     self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7], tu.quat_from_angle_axis(angle, axis))
+                # start vel randomization
                 self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] += 0.05 * (
                             torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
+            else:
+                self.progress_buf[env_ids] = 0
+                self.copy_ref_pos_to_state(env_ids)
 
             # clear action
             self.actions = self.actions.clone()
@@ -599,6 +605,9 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         next_state.joint_q[:] = self.reference_joint_q[frame_index, :].view(-1)
         next_state.joint_qd[:] = self.reference_joint_qd[frame_index, :].view(-1)
 
+        # rotate the torso
+        next_state.joint_q.view(self.num_envs, -1)[:, 3:7] = tu.quat_from_angle_axis(torch.tensor([math.pi * 0.5]).repeat(self.num_envs).to(self.device), self.y_unit_tensor)
+
         # perform forward kinematics
         body_X_sc, body_X_sm = eval_rigid_fk_grad(self.reference_model, next_state.joint_q)
         next_state.body_X_sc = body_X_sc
@@ -630,6 +639,6 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # reset position
         self.state.joint_q.view(self.num_envs, -1)[env_ids, 0] = 0.0
         # ground height correction
-        self.state.joint_q.view(self.num_envs, -1)[env_ids, 1] -= 0.14
+        self.state.joint_q.view(self.num_envs, -1)[env_ids, 1] -= 0.1
         self.state.joint_q.view(self.num_envs, -1)[env_ids, 2] = 0.0
-        # self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_from_angle_axis(torch.tensor([math.pi * 0.5]).to(self.device), self.y_unit_tensor)
+        self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_from_angle_axis(torch.tensor([math.pi * 0.5]).repeat(len(env_ids)).to(self.device), torch.tensor([0.0, 1.0, 0.0]).view(1, -1).repeat(len(env_ids), 1).to(self.device))

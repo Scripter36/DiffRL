@@ -37,11 +37,13 @@ class SHAC:
     def __init__(self, cfg):
         env_fn = getattr(envs, cfg["params"]["diff_env"]["name"])
 
-        seeding(cfg["params"]["general"]["seed"])
+        seed = cfg["params"]["general"]["seed"]
+        seed = random.randint(0, 1000000)
+        seeding(seed)
         self.env = env_fn(num_envs = cfg["params"]["config"]["num_actors"], \
                             device = cfg["params"]["general"]["device"], \
                             render = cfg["params"]["general"]["render"], \
-                            seed = cfg["params"]["general"]["seed"], \
+                            seed = seed, \
                             episode_length=cfg["params"]["diff_env"].get("episode_length", 250), \
                             stochastic_init = cfg["params"]["diff_env"].get("stochastic_env", True), \
                             MM_caching_frequency = cfg["params"]['diff_env'].get('MM_caching_frequency', 1), \
@@ -436,14 +438,14 @@ class SHAC:
                 self.grad_norm_after_clip = tu.grad_norm(self.actor.parameters()) 
                 
                 # sanity check
-                # if torch.isnan(self.grad_norm_before_clip) or self.grad_norm_before_clip > 1000000.:
-                #     print('NaN gradient. grad norm before clip = {:.2f}'.format(self.grad_norm_before_clip))
-                #     raise ValueError
+                if torch.isnan(self.grad_norm_before_clip) or self.grad_norm_before_clip > 1000000.:
+                    print('NaN gradient. grad norm before clip = {:.2f}'.format(self.grad_norm_before_clip))
+                    raise ValueError
 
                 # instead, make it zero if it is NaN or inf
-                for param in self.actor.parameters():
-                    if torch.isnan(param.grad).sum() > 0 or torch.isinf(param.grad).sum() > 0:
-                        param.grad.zero_()
+                # for param in self.actor.parameters():
+                #     if torch.isnan(param.grad).sum() > 0 or torch.isinf(param.grad).sum() > 0:
+                #         param.grad.zero_()
 
             self.time_report.end_timer("compute actor loss")
 

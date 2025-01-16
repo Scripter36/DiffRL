@@ -56,7 +56,19 @@ def main():
             print(f"{YELLOW}Running training for environment: {selected_env_name}{RESET}")  # Yellow text for status messages
             # Print command in white (default)
             print(f"python examples/train_shac.py --cfg {selected_env} --logdir {log_dir}")
-            subprocess.run([sys.executable, "examples/train_shac.py", "--cfg", selected_env, "--logdir", log_dir])
+            num_tries = 1
+            while True:
+                try:
+                    result = subprocess.run([sys.executable, "examples/train_shac.py", "--cfg", selected_env, "--logdir", log_dir])
+                    if result.returncode == 0:
+                        print(f"{YELLOW}Training completed with {num_tries} tries.{RESET}")  # Yellow text for status messages
+                        break
+                    else:
+                        raise Exception(f"Training failed with {num_tries} tries.")
+                except Exception as e:
+                    print(f"{YELLOW}Error: {e}{RESET}")  # Yellow text for errors
+                    print(f"{YELLOW}Restarting training... ({num_tries} tries){RESET}")  # Yellow text for errors
+                    num_tries += 1
             break
 
         elif choice == "2":
