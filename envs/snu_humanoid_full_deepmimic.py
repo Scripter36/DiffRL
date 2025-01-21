@@ -159,8 +159,11 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         # finalize model
         self.model = self.builder.finalize(self.device)
-        self.model.ground = self.ground
-        self.model.gravity = torch.tensor((0.0, -9.81, 0.0), dtype=torch.float32, device=self.device)
+        # self.model.ground = self.ground
+        # self.model.gravity = torch.tensor((0.0, -9.81, 0.0), dtype=torch.float32, device=self.device)
+        # turn off collision and gravity
+        self.model.ground = False
+        self.model.gravity = torch.tensor((0.0, 0.0, 0.0), dtype=torch.float32, device=self.device)
 
         # load reference motion
         self.reference_frame_time, self.reference_frame_count, self.reference_joint_q, self.reference_joint_q_mask, self.reference_joint_qd = \
@@ -298,9 +301,6 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         #################################################
 
         self.actions = actions.clone()
-
-        # debug: copy the pos
-        # self.copy_ref_pos_to_state()
 
         # simulate the model
         # print the norm of joint_qd
@@ -484,6 +484,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
             relative_body_X_sc = self.obs_buf[:, 25:-1].view(self.num_envs, -1, 7)
             ref_root_transform = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
             ref_relative_body_X_sc = tu.to_local_frame_spatial(self.reference_state.body_X_sc.view(self.num_envs, -1, 7).clone(), ref_root_transform)
+            
+            body_pos_diff = relative_body_X_sc[:, :, 0:3] - ref_relative_body_X_sc[:, :, 0:3]
 
             # pos reward: exp(-2 * sum(body quat, ref body quat diff **2))
             body_quat = relative_body_X_sc[:, :, 3:7]
@@ -562,16 +564,16 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # print the mean reward
         # print(f"mean imitation reward: {torch.mean(imitation_reward).item()}, mean goal reward: {torch.mean(goal_reward).item()}")
 
-        self.rew_buf = w_i * imitation_reward + w_g * goal_reward + act_penalty
+        self.rew_buf = imitation_reward
 
         # reset agents (early termination)
-        self.reset_buf = torch.where(self.obs_buf[:, 8] < self.termination_height, torch.ones_like(self.reset_buf),
-                                        self.reset_buf)
+        # self.reset_buf = torch.where(self.obs_buf[:, 8] < self.termination_height, torch.ones_like(self.reset_buf),
+        #                                 self.reset_buf)
         
         # # if pos reward is less than -1, reset
         # body_pos_diff = relative_body_X_sc[:, :, 0:3] - ref_relative_body_X_sc[:, :, 0:3]
-        # self.reset_buf = torch.where(torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1) > 0.4, torch.ones_like(self.reset_buf),
-        #                                 self.reset_buf)
+        self.reset_buf = torch.where(torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1) > 0.1, torch.ones_like(self.reset_buf),
+                                        self.reset_buf)
         self.reset_buf = torch.where(self.progress_buf > self.episode_length - 1, torch.ones_like(self.reset_buf),
                                      self.reset_buf)
 
@@ -607,7 +609,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         next_state.joint_qd[:] = self.reference_joint_qd[frame_index, :].view(-1)
 
         # rotate the torso
-        next_state.joint_q.view(self.num_envs, -1)[:, 3:7] = tu.quat_from_angle_axis(torch.tensor([math.pi * 0.5]).repeat(self.num_envs).to(self.device), self.y_unit_tensor)
+        # next_state.joint_q.view(self.num_envs, -1)[:, 3:7] = tu.quat_from_angle_axis(torch.tensor([math.pi * 0.5]).repeat(self.num_envs).to(self.device), self.y_unit_tensor)
 
         # perform forward kinematics
         body_X_sc, body_X_sm = eval_rigid_fk_grad(self.reference_model, next_state.joint_q)
@@ -642,4 +644,4 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # ground height correction
         self.state.joint_q.view(self.num_envs, -1)[env_ids, 1] = 1.0
         self.state.joint_q.view(self.num_envs, -1)[env_ids, 2] = 0.0
-        self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_from_angle_axis(torch.tensor([math.pi * 0.5]).repeat(len(env_ids)).to(self.device), torch.tensor([0.0, 1.0, 0.0]).view(1, -1).repeat(len(env_ids), 1).to(self.device))
+        # self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_from_angle_axis(torch.tensor([math.pi * 0.5]).repeat(len(env_ids)).to(self.device), torch.tensor([0.0, 1.0, 0.0]).view(1, -1).repeat(len(env_ids), 1).to(self.device))

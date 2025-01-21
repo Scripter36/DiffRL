@@ -3,6 +3,7 @@ import subprocess
 import sys
 import re
 from pathlib import Path
+import time
 
 # ANSI color codes
 YELLOW = "\033[93m"
@@ -69,6 +70,7 @@ def main():
                     print(f"{YELLOW}Error: {e}{RESET}")  # Yellow text for errors
                     print(f"{YELLOW}Restarting training... ({num_tries} tries){RESET}")  # Yellow text for errors
                     num_tries += 1
+                    time.sleep(3)
             break
 
         elif choice == "2":

@@ -21,9 +21,9 @@ class CriticDataset:
             self.shuffle()
 
         self.valid_obs_length = steps_num * envs_num
+        self.valid_env_mask = valid_env_mask
 
         if valid_env_mask is not None:
-            self.valid_env_mask = valid_env_mask
             valid_env_num = self.valid_env_mask.sum().item()
             self.valid_obs_length = valid_env_num * steps_num
             self.env_index_map = ((self.valid_env_mask.nonzero().view(-1) * steps_num).unsqueeze(1).repeat(1, steps_num) + torch.arange(steps_num, device=self.valid_env_mask.device).unsqueeze(0).repeat(valid_env_num, 1)).view(-1)
