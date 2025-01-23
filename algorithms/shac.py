@@ -417,6 +417,7 @@ class SHAC:
         print_info('mean episode loss = {}, mean discounted loss = {}, mean episode length = {}'.format(mean_policy_loss, mean_policy_discounted_loss, mean_episode_length))
         
     def train(self):
+        torch.autograd.set_detect_anomaly(True)
         # load checkpoint
         self.start_time = time.time()
 

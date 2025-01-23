@@ -125,15 +125,12 @@ def quat_to_matrix(q):
     q: (num_envs, 4)
     return: (num_envs, 3, 3)
     """
-    # 쿼터니언 성분 추출
     x, y, z, w = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
     
-    # 행렬 요소 계산
     x2, y2, z2 = x * x, y * y, z * z
     wx, wy, wz = w * x, w * y, w * z
     xy, yz, xz = x * y, y * z, x * z
     
-    # 3x3 회전 행렬 생성
     rot = torch.stack([
         1 - 2 * (y2 + z2), 2 * (xy - wz), 2 * (xz + wy),
         2 * (xy + wz), 1 - 2 * (x2 + z2), 2 * (yz - wx),
@@ -142,14 +139,31 @@ def quat_to_matrix(q):
     
     return rot
 
-# assuming q is unit quaternion
 @torch.jit.script
-def quat_log(q):
-    return q[:, :3] * torch.arccos(torch.clamp(q[:, 3:4], min=-1.0, max=1.0))
+def normalize_angle(theta):
+    """
+    map [0, 2pi] to [-pi, pi]
+    theta: (num_envs)
+    return: (num_envs)
+    """
+    norm_theta = torch.fmod(theta, 2 * math.pi)
+    norm_theta = torch.where(norm_theta > math.pi, -2 * math.pi + norm_theta, norm_theta)
+    norm_theta = torch.where(norm_theta < -math.pi, 2 * math.pi + norm_theta, norm_theta)
+    return norm_theta
+
+@torch.jit.script
+def quat_theta(q):
+    """
+    q: (..., 4)
+    return: (..., 1)
+    """
+    shape = q.shape
+    q = q.reshape(-1, 4)
+    return normalize_angle(torch.arccos(torch.clamp(q[:, 3:4], min=-1.0 + 1e-5, max=1.0 - 1e-5))).view(shape[:-1]).unsqueeze(-1)
 
 @torch.jit.script
 def quat_diff(q1, q2):
-    return quat_log(quat_mul(quat_conjugate(q2), q1))
+    return quat_theta(quat_mul(q2, quat_conjugate(q1)))
 
 @torch.jit.script
 def angular_velocity(q1, q2):
@@ -162,6 +176,11 @@ def angular_velocity(q1, q2):
         q1[:, 3]*q2[:, 0] - q1[:, 0]*q2[:, 3] - q1[:, 1]*q2[:, 2] + q1[:, 2]*q2[:, 1],
         q1[:, 3]*q2[:, 1] - q1[:, 1]*q2[:, 3] - q1[:, 2]*q2[:, 0] + q1[:, 0]*q2[:, 2],
         q1[:, 3]*q2[:, 2] - q1[:, 2]*q2[:, 3] - q1[:, 0]*q2[:, 1] + q1[:, 1]*q2[:, 0]], dim=-1)
+
+# assuming q is unit quaternion
+@torch.jit.script
+def quat_log(q):
+    return q[:, :3] * quat_theta(q)
 
 @torch.jit.script
 def normalize_angle(x):
