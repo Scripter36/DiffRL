@@ -126,8 +126,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         for i in range(self.num_environments):
             self.skeletons.append(lu.Skeleton(asset_path, muscle_path, self.builder, self.filter,
-                                       stiffness=0.0,
-                                       damping=0.2, # stiffness and damping = k_p, k_d in PD control
+                                       stiffness=5.0,
+                                       damping=2.0, # stiffness and damping = k_p, k_d in PD control
                                        contact_ke=5e3,
                                        contact_kd=2e3,
                                        contact_kf=1e3,
@@ -138,8 +138,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
             # load reference skeleton for this skeleton
             lu.Skeleton(asset_path, None, self.reference_builder, self.filter,
-                                       stiffness=0.0,
-                                       damping=0.2, # stiffness and damping = k_p, k_d in PD control
+                                       stiffness=5.0,
+                                       damping=2.0, # stiffness and damping = k_p, k_d in PD control
                                        contact_ke=5e3,
                                        contact_kd=2e3,
                                        contact_kf=1e3,
@@ -401,8 +401,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
                 # self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_mul(
                 #     self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7], tu.quat_from_angle_axis(angle, axis))
                 # # start vel randomization
-                # self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] += 0.05 * (
-                #             torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
+                self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] += 0.05 * (
+                            torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
             else:
                 self.progress_buf[env_ids] = 0
                 self.copy_ref_pos_to_state(env_ids)
@@ -615,7 +615,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         
         # # if pos reward is less than -1, reset
         # body_pos_diff = relative_body_X_sc[:, :, 0:3] - ref_relative_body_X_sc[:, :, 0:3]
-        self.reset_buf = torch.where(torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1) > 0.4, torch.ones_like(self.reset_buf),
+        self.reset_buf = torch.where(torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1) > 0.2, torch.ones_like(self.reset_buf),
                                         self.reset_buf)
         self.reset_buf = torch.where(self.progress_buf > self.episode_length - 1, torch.ones_like(self.reset_buf),
                                      self.reset_buf)
