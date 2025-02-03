@@ -15,3 +15,8 @@ dflex/dflex/kernels
 # IDE files
 .idea
 .vscode
+
+# mlflow
+mlruns
+mlartifacts
+.env

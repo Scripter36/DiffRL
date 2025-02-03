@@ -20,7 +20,9 @@ import copy
 import torch
 from tensorboardX import SummaryWriter
 import yaml
-
+import mlflow
+from mlflow.entities import Metric
+from utils.mlflow_utils import mlflow_manager
 import dflex as df
 
 import envs
@@ -37,13 +39,13 @@ class SHAC:
     def __init__(self, cfg):
         env_fn = getattr(envs, cfg["params"]["diff_env"]["name"])
 
-        seed = cfg["params"]["general"]["seed"]
-        seed = random.randint(0, 1000000)
-        seeding(seed)
+        self.seed = cfg["params"]["general"]["seed"]
+        self.seed = random.randint(0, 1000000)
+        seeding(self.seed)
         self.env = env_fn(num_envs = cfg["params"]["config"]["num_actors"], \
                             device = cfg["params"]["general"]["device"], \
                             render = cfg["params"]["general"]["render"], \
-                            seed = seed, \
+                            seed = self.seed, \
                             episode_length=cfg["params"]["diff_env"].get("episode_length", 250), \
                             stochastic_init = cfg["params"]["diff_env"].get("stochastic_env", True), \
                             MM_caching_frequency = cfg["params"]['diff_env'].get('MM_caching_frequency', 1), \
@@ -599,12 +601,36 @@ class SHAC:
                 mean_policy_loss = np.inf
                 mean_policy_discounted_loss = np.inf
                 mean_episode_length = 0
-            
-            print('iter {}: ep loss {:.2f}, ep discounted loss {:.2f}, ep len {:.1f}, fps total {:.2f}, value loss {:.2f}, grad norm before clip {:.2f}, grad norm after clip {:.2f}'.format(\
-                    self.iter_count, mean_policy_loss, mean_policy_discounted_loss, mean_episode_length, self.steps_num * self.num_envs / (time_end_epoch - time_start_epoch), self.value_loss, self.grad_norm_before_clip, self.grad_norm_after_clip))
 
+            print('iter {}: ep loss {:.2f}, ep discounted loss {:.2f}, ep len {:.1f}, fps total {:.2f}, value loss {:.2f}, grad norm before clip {:.2f}, grad norm after clip {:.2f}'.format(
+                    self.iter_count, mean_policy_loss, mean_policy_discounted_loss, mean_episode_length, 
+                    self.steps_num * self.num_envs / (time_end_epoch - time_start_epoch), self.value_loss, 
+                    self.grad_norm_before_clip, self.grad_norm_after_clip))
             self.writer.flush()
-        
+
+            # ---- MLFlow logging (added) ----
+            all_metrics = []
+            timestamp_now = round(time.time() * 1000)
+            all_metrics.append(Metric(key="lr_iter", value=lr, step=self.iter_count, timestamp=timestamp_now))
+            all_metrics.append(Metric(key="actor_loss_step", value=self.actor_loss, step=self.step_count, timestamp=timestamp_now))
+            all_metrics.append(Metric(key="actor_loss_iter", value=self.actor_loss, step=self.iter_count, timestamp=timestamp_now))
+            all_metrics.append(Metric(key="value_loss_step", value=self.value_loss, step=self.step_count, timestamp=timestamp_now))
+            all_metrics.append(Metric(key="value_loss_iter", value=self.value_loss, step=self.iter_count, timestamp=timestamp_now))
+            if len(self.episode_loss_his) > 0:
+                all_metrics.append(Metric(key="policy_loss_step", value=mean_policy_loss, step=self.step_count, timestamp=timestamp_now))
+                all_metrics.append(Metric(key="policy_loss_iter", value=mean_policy_loss, step=self.iter_count, timestamp=timestamp_now))
+                all_metrics.append(Metric(key="rewards_step", value=-mean_policy_loss, step=self.step_count, timestamp=timestamp_now))
+                all_metrics.append(Metric(key="rewards_iter", value=-mean_policy_loss, step=self.iter_count, timestamp=timestamp_now))
+                all_metrics.append(Metric(key="policy_discounted_loss_step", value=mean_policy_discounted_loss, step=self.step_count, timestamp=timestamp_now   ))
+                all_metrics.append(Metric(key="policy_discounted_loss_iter", value=mean_policy_discounted_loss, step=self.iter_count, timestamp=timestamp_now))
+                all_metrics.append(Metric(key="best_policy_loss_step", value=self.best_policy_loss, step=self.step_count, timestamp=timestamp_now))
+                all_metrics.append(Metric(key="best_policy_loss_iter", value=self.best_policy_loss, step=self.iter_count, timestamp=timestamp_now))
+                all_metrics.append(Metric(key="episode_lengths_iter", value=mean_episode_length, step=self.iter_count, timestamp=timestamp_now))
+                all_metrics.append(Metric(key="episode_lengths_step", value=mean_episode_length, step=self.step_count, timestamp=timestamp_now))
+
+            mlflow_manager.mlflow_client.log_batch(mlflow_manager.active_run.info.run_id, all_metrics)
+            # ---- End MLFlow logging ----
+
             if self.save_interval > 0 and (self.iter_count % self.save_interval == 0):
                 self.save(self.name + "policy_iter{}_reward{:.3f}".format(self.iter_count, -mean_policy_loss))
 
@@ -641,16 +667,50 @@ class SHAC:
     def save(self, filename = None):
         if filename is None:
             filename = 'best_policy'
-        torch.save([self.actor, self.critic, self.target_critic, self.obs_rms, self.ret_rms], os.path.join(self.log_dir, "{}.pt".format(filename)))
+        # Define a wrapper module to bundle multiple components for saving.
+        import torch.nn as nn
+        import threading
+        
+        class SHACCheckpoint(nn.Module):
+            def __init__(self, actor, critic, target_critic, obs_rms, ret_rms, seed):
+                super(SHACCheckpoint, self).__init__()
+                self.actor = actor
+                self.critic = critic
+                self.target_critic = target_critic
+                self.obs_rms = obs_rms
+                self.ret_rms = ret_rms
+                self.seed = seed
+
+            def forward(self, x):
+                raise NotImplementedError("This checkpoint model is for storage only and not for inference")
+
+        # Clone models and move to CPU
+        actor_cpu = copy.deepcopy(self.actor).to('cpu')
+        critic_cpu = copy.deepcopy(self.critic).to('cpu')
+        target_critic_cpu = copy.deepcopy(self.target_critic).to('cpu')
+        # already copied, do not need to copy again
+        obs_rms_cpu = self.obs_rms.to('cpu') if self.obs_rms is not None else None
+        ret_rms_cpu = self.ret_rms.to('cpu') if self.ret_rms is not None else None
+        
+        checkpoint_model = SHACCheckpoint(actor_cpu, critic_cpu, target_critic_cpu, obs_rms_cpu, ret_rms_cpu, self.seed)
+
+        def save_checkpoint():
+            mlflow.pytorch.log_model(checkpoint_model, filename, run_id=mlflow_manager.active_run.info.run_id)
+
+        # Run save in separate thread
+        save_thread = threading.Thread(target=save_checkpoint)
+        save_thread.start()
     
     def load(self, path):
-        checkpoint = torch.load(path)
-        self.actor = checkpoint[0].to(self.device)
-        self.critic = checkpoint[1].to(self.device)
-        self.target_critic = checkpoint[2].to(self.device)
-        self.obs_rms = checkpoint[3].to(self.device)
-        self.ret_rms = checkpoint[4].to(self.device) if checkpoint[4] is not None else checkpoint[4]
-        
+        loaded_model = mlflow.pytorch.load_model(path)
+        self.actor = loaded_model.actor.to(self.device)
+        self.critic = loaded_model.critic.to(self.device)
+        self.target_critic = loaded_model.target_critic.to(self.device)
+        self.obs_rms = loaded_model.obs_rms.to(self.device) if loaded_model.obs_rms is not None else None
+        self.ret_rms = loaded_model.ret_rms.to(self.device) if loaded_model.ret_rms is not None else None
+        self.seed = loaded_model.seed
+        seeding(self.seed)
+
     def close(self):
         self.writer.close()
     

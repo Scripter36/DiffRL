@@ -14,6 +14,8 @@ dependencies:
     - pyyaml==6.0
     - tensorboard==2.8.0
     - tensorboardx==2.5
+    - mlflow==2.17.2
+    - python-dotenv==1.0.1
     - urdfpy==0.0.22
     - usd-core==24.11
     - protobuf==3.20.0

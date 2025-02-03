@@ -19,6 +19,8 @@ import os
 import sys
 import yaml
 import torch
+import mlflow
+from utils.mlflow_utils import flatten_dict, mlflow_manager
 
 import numpy as np
 import copy
@@ -101,17 +103,27 @@ if __name__ == '__main__':
     args.device = torch.device(args.device)
 
     vargs = vars(args)
-
     cfg_train["params"]["general"] = {}
     for key in vargs.keys():
         cfg_train["params"]["general"][key] = vargs[key]
 
-    traj_optimizer = shac.SHAC(cfg_train)
-
     if args.train:
-        if 'checkpoint' in cfg_train["params"]["general"] and cfg_train["params"]["general"]["checkpoint"] != "Base":
-            print("Loading checkpoint from", cfg_train["params"]["general"]["checkpoint"])
-            traj_optimizer.load(cfg_train["params"]["general"]["checkpoint"])
-        traj_optimizer.train()
+        # ----------- MLFlow integration starts here -----------
+        experiment_name = cfg_train["params"]["config"].get("name", "default_experiment")
+        mlflow.set_experiment(experiment_name)
+        print(f"MLFlow experiment: {experiment_name}")
+        # flatten the configuration dictionary and log it as parameters
+        flat_cfg = flatten_dict(cfg_train)
+
+        mlflow.end_run()
+        with mlflow.start_run() as run:
+            mlflow_manager.active_run = run
+            mlflow_manager.mlflow_client.log_param
+            mlflow.log_params(flat_cfg)
+            traj_optimizer = shac.SHAC(cfg_train)
+            if 'checkpoint' in cfg_train["params"]["general"] and cfg_train["params"]["general"]["checkpoint"] != "Base":
+                print("Loading checkpoint from", cfg_train["params"]["general"]["checkpoint"])
+                traj_optimizer.load(cfg_train["params"]["general"]["checkpoint"])
+            traj_optimizer.train()
     else:
-        traj_optimizer.play(cfg_train)
+        shac.SHAC(cfg_train).play(cfg_train)
