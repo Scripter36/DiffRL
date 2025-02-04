@@ -51,4 +51,23 @@ def flatten_dict(d, parent_key='', sep='.'):
             items.update(flatten_dict(v, new_key, sep=sep))
         else:
             items[new_key] = v
-    return items 
+    return items
+
+def unflatten_dict(d, sep='.'):
+    """
+    Unflattens a dictionary.
+    For example, {"a.b": 1, "a.c": 2} becomes {"a": {"b": 1, "c": 2}}.
+    """
+    result = {}
+    for k, v in d.items():
+        parts = k.split(sep)
+        current = result
+        for part in parts[:-1]:
+            current = current.setdefault(part, {})
+        current[parts[-1]] = v
+    return result
+
+def set_experiment_name_from_env(default_experiment_name):
+    experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", default_experiment_name)
+    mlflow.set_experiment(experiment_name)
+    print(f"MLFlow experiment: {experiment_name}")

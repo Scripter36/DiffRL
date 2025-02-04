@@ -304,7 +304,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
                     nan_count = torch.isnan(grad).sum()
                     inf_count = torch.isinf(grad).sum()
                     big_count = (torch.abs(grad) > 1e6).sum()
-                    print(f'{name} grad nan count: {nan_count}, inf count: {inf_count}, big count: {big_count}.')
+                    # TODO: too verbose; find a better way to handle this
+                    # print(f'{name} grad nan count: {nan_count}, inf count: {inf_count}, big count: {big_count}.')
                     err_count = nan_count + inf_count + big_count
                     if 0 < nan_count < 10:
                         print(f'{name} grad nan index: {torch.nonzero(torch.isnan(grad)).squeeze(-1)}')
