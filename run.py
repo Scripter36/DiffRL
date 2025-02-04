@@ -148,6 +148,7 @@ def main():
 
             # subprocess to run inference
             subprocess.run([sys.executable, "scripts/train_shac.py", "--checkpoint", checkpoint_path, "--run", run_id, "--play"] + (["--render"] if render else []))
+            break
         else:
             print(f"{YELLOW}Invalid choice. Please try again.{RESET}")  # Yellow text for errors
 
