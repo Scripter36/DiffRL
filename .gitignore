@@ -2,11 +2,10 @@
 __pycache__
 
 # render files
-examples/outputs
 outputs
 
 # logs
-examples/logs
+logs
 
 # dflex build files
 dflex/dflex.egg-info
@@ -15,3 +14,8 @@ dflex/dflex/kernels
 # IDE files
 .idea
 .vscode
+
+# mlflow
+mlruns
+mlartifacts
+.env

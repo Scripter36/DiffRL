@@ -8,6 +8,8 @@
 # gradient-based policy optimization by actor critic method
 import sys, os
 
+import mlflow.artifacts
+
 project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.append(project_dir)
 
@@ -19,12 +21,13 @@ import os
 import sys
 import yaml
 import torch
+import mlflow
+from utils.mlflow_utils import flatten_dict, mlflow_manager, set_experiment_name_from_env, unflatten_dict
 
 import numpy as np
 import copy
 
 from utils.common import *
-
 
 def parse_arguments(description="Testing Args", custom_parameters=[]):
     parser = argparse.ArgumentParser()
@@ -68,14 +71,16 @@ def get_args(): # TODO: delve into the arguments
             "help": "Configuration file for training/playing"},
         {"name": "--play", "action": "store_true", "default": False,
             "help": "Run trained policy, the same as test"},
-        {"name": "--checkpoint", "type": str, "default": "Base",
+        {"name": "--run", "type": str, "default": None,
+            "help": "run id to play"},
+        {"name": "--checkpoint", "type": str, "default": None,
             "help": "Path to the saved weights"},
         {"name": "--logdir", "type": str, "default": "logs/tmp/shac/"},
         {"name": "--save-interval", "type": int, "default": 0},
         {"name": "--no-time-stamp", "action": "store_true", "default": False,
             "help": "whether not add time stamp at the log path"},
         {"name": "--device", "type": str, "default": "cuda:0"},
-        {"name": "--seed", "type": int, "default": 0, "help": "Random seed"},
+        {"name": "--seed", "type": int, "default": None, "help": "Random seed"},
         {"name": "--render", "action": "store_true", "default": False,
             "help": "whether generate rendering file."}]
     
@@ -88,11 +93,37 @@ def get_args(): # TODO: delve into the arguments
 
 if __name__ == '__main__':
     args = get_args()
+    vargs = vars(args)
 
-    with open(args.cfg, 'r') as f:
-        cfg_train = yaml.load(f, Loader=yaml.SafeLoader)
+    # load base config
+    run_id = vargs["run"]
+    checkpoint_name = vargs["checkpoint"]
+    if checkpoint_name is not None and run_id is not None:
+        # if checkpoint is provided, load the run and get the parameters
+        checkpoint_path = f'runs:/{run_id}/{checkpoint_name}'
+        loaded_run = mlflow.get_run(run_id)
+        cfg_train = mlflow.artifacts.load_dict(loaded_run.info.artifact_uri + "/cfg_train.json")
+        print('loaded parameters:', cfg_train)
+    else:
+        checkpoint_path = None
+        # else, load the config file
+        with open(args.cfg, 'r') as f:
+            cfg_train = yaml.load(f, Loader=yaml.SafeLoader)
 
-    if args.play or args.test:
+    # override the parameters with the command line arguments
+    cfg_train["params"]["general"] = {}
+    for key in vargs.keys():
+        if vargs[key] is not None: 
+            cfg_train["params"]["general"][key] = vargs[key]
+        else:
+            cfg_train["params"]["general"][key] = cfg_train["params"]["general"].get(key, None)
+
+    # seed default value
+    if cfg_train["params"]["general"]["seed"] is None:
+        cfg_train["params"]["general"]["seed"] = random.randint(0, 1000000)
+
+    # for playing, set the number of actors to 1 default
+    if args.play or args.test:  
         cfg_train["params"]["config"]["num_actors"] = cfg_train["params"]["config"].get("player", {}).get("num_actors", 1)
 
     if not args.no_time_stamp:
@@ -100,18 +131,22 @@ if __name__ == '__main__':
     
     args.device = torch.device(args.device)
 
-    vargs = vars(args)
-
-    cfg_train["params"]["general"] = {}
-    for key in vargs.keys():
-        cfg_train["params"]["general"][key] = vargs[key]
-
-    traj_optimizer = shac.SHAC(cfg_train)
-
     if args.train:
-        if 'checkpoint' in cfg_train["params"]["general"] and cfg_train["params"]["general"]["checkpoint"] != "Base":
-            print("Loading checkpoint from", cfg_train["params"]["general"]["checkpoint"])
-            traj_optimizer.load(cfg_train["params"]["general"]["checkpoint"])
-        traj_optimizer.train()
+        # ----------- MLFlow integration starts here -----------
+        set_experiment_name_from_env(cfg_train["params"]["config"].get("name", "default_experiment"))
+
+        mlflow.end_run()
+        with mlflow.start_run() as run:
+            mlflow_manager.active_run = run
+            mlflow.log_params(flatten_dict(cfg_train))
+            # also store original cfg_train for reproducibility
+            mlflow.log_dict(cfg_train, "cfg_train.json")
+            traj_optimizer = shac.SHAC(cfg_train)
+            if checkpoint_path is not None:
+                traj_optimizer.load(checkpoint_path)
+            traj_optimizer.train()
     else:
-        traj_optimizer.play(cfg_train)
+        traj_optimizer = shac.SHAC(cfg_train)
+        if checkpoint_path is not None:
+            traj_optimizer.load(checkpoint_path)
+        traj_optimizer.run(cfg_train['params']['config']['player']['games_num'])

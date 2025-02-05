@@ -168,8 +168,11 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         # finalize model
         self.model = self.builder.finalize(self.device)
-        self.model.ground = self.ground
+        # self.model.ground = self.ground
         self.model.gravity = torch.tensor((0.0, -9.81, 0.0), dtype=torch.float32, device=self.device)
+        # turn off collision and gravity
+        self.model.ground = False
+        # self.model.gravity = torch.tensor((0.0, 0.0, 0.0), dtype=torch.float32, device=self.device)
 
         # load reference motion
         self.reference_frame_time, self.reference_frame_count, self.reference_joint_q, self.reference_joint_q_mask, self.reference_joint_qd = \
@@ -194,7 +197,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.copy_ref_pos_to_state()
 
     def render(self, mode='human'):
-        render_asset_folder = 'C:/Users/1350a/dev/imo/DiffRL/envs/assets/snu'
+        render_asset_folder = self.asset_folder
 
         if self.visualize:
             self.render_time += self.dt * self.inv_control_freq
@@ -299,8 +302,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
                     # return torch.clip(torch.nan_to_num(grad, 0.0, 100.0, -100.0, out=grad), -100.0, 100.0)
                     nan_count = torch.isnan(grad).sum()
                     inf_count = torch.isinf(grad).sum()
-                    big_count = (torch.abs(grad) > 1e6).sum()
-                    print(f'{name} grad nan count: {nan_count}, inf count: {inf_count}, big count: {big_count}.')
+                    # TODO: too verbose; find a better way to handle this
+                    # print(f'{name} grad nan count: {nan_count}, inf count: {inf_count}, big count: {big_count}.')
                     if 0 < nan_count < 10:
                         print(f'{name} grad nan index: {torch.nonzero(torch.isnan(grad)).squeeze(-1)}')
                     if 0 < inf_count < 10:
