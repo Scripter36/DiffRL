@@ -1213,7 +1213,7 @@ def compute_muscle_force(
     body_v_s: df.tensor(df.spatial_vector),    
     muscle_links: df.tensor(int),
     muscle_points: df.tensor(df.float3),
-    muscle_activation: float,
+    force: float,
     body_f_s: df.tensor(df.spatial_vector)):
 
     link_0 = df.load(muscle_links, i)
@@ -1232,15 +1232,50 @@ def compute_muscle_force(
     pos_1 = df.spatial_transform_point(xform_1, r_1)
 
     n = df.normalize(pos_1 - pos_0)
-
-    # todo: add passive elastic and viscosity terms
-    f = n * muscle_activation
+    f = n * force
 
     df.atomic_sub(body_f_s, link_0, df.spatial_vector(df.cross(pos_0, f), f))
     df.atomic_add(body_f_s, link_1, df.spatial_vector(df.cross(pos_1, f), f))
 
     return 0
 
+@df.func
+def compute_muscle_length(
+    i: int,
+    muscle_links: df.tensor(int),
+    muscle_points: df.tensor(df.float3),
+    body_X_s: df.tensor(df.spatial_transform)):
+
+    link_0 = df.load(muscle_links, i)
+    link_1 = df.load(muscle_links, i+1)
+
+    if (link_0 == link_1):
+        return 0.0
+
+    r_0 = df.load(muscle_points, i)
+    r_1 = df.load(muscle_points, i+1)
+
+    xform_0 = df.load(body_X_s, link_0)
+    xform_1 = df.load(body_X_s, link_1)
+
+    pos_0 = df.spatial_transform_point(xform_0, r_0)
+    pos_1 = df.spatial_transform_point(xform_1, r_1)
+
+    return df.length(pos_1 - pos_0)
+
+@df.func
+def g_al(normalized_length: float, gamma: float):
+    # e^(-(normalized_length - 1)^2 / 0.45)
+    return df.exp(0.0 - (normalized_length - 1.0) * (normalized_length - 1.0) / gamma)
+
+@df.func    
+def g_pl(normalized_length: float, k_pe: float, e_mo: float):
+    f_pl = (df.exp(k_pe * (normalized_length - 1.0) / e_mo) - 1.0) / (df.exp(k_pe) - 1.0)
+
+    if normalized_length < 1.0:
+        return 0.0
+
+    return f_pl
 
 @df.kernel
 def eval_muscles(
@@ -1260,10 +1295,67 @@ def eval_muscles(
     m_end = df.load(muscle_start, tid+1) - 1
 
     activation = df.load(muscle_activation, tid)
+    # muscle params: f0, lm, lt, lmax, pen
+    f0 = df.load(muscle_params, tid * 5 + 0)
+    l_m0 = df.load(muscle_params, tid * 5 + 1)
+    l_t0 = df.load(muscle_params, tid * 5 + 2)
+    l_max = df.load(muscle_params, tid * 5 + 3)
+    pen = df.load(muscle_params, tid * 5 + 4)
+
+    # 1. calculate total muscle length
+    l_mt = 0.0
+    # sum in for loop won't work, because the dflex code generation doesn't support it
+    # for i in range(m_start, m_end):
+    #     l_mt = l_mt + compute_muscle_length(i, muscle_links, muscle_points, body_X_s)
+    # quick and dirty solution: make if statement for up to 8 segments
+    # even dflex does not support else statements
+    m_len = m_end - m_start
+    if m_len == 0:
+        l_mt = 0.0
+    if m_len == 1:
+        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s)
+    if m_len == 2:
+        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s)
+    if m_len == 3:
+        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
+              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s)
+    if m_len == 4:
+        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
+              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s)
+    if m_len == 5:
+        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
+              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s) \
+              + compute_muscle_length(m_start + 4, muscle_links, muscle_points, body_X_s)
+    if m_len == 6:
+        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
+              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s) \
+              + compute_muscle_length(m_start + 4, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 5, muscle_links, muscle_points, body_X_s)
+    if m_len == 7:
+        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
+              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s) \
+              + compute_muscle_length(m_start + 4, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 5, muscle_links, muscle_points, body_X_s) \
+              + compute_muscle_length(m_start + 6, muscle_links, muscle_points, body_X_s)
+    if m_len == 8:
+        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
+              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s) \
+              + compute_muscle_length(m_start + 4, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 5, muscle_links, muscle_points, body_X_s) \
+              + compute_muscle_length(m_start + 6, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 7, muscle_links, muscle_points, body_X_s)
+    if m_len > 8:
+        print(0-123)
+
+
+    # 2. calculate normalized muscle length
+    l_m = l_mt - l_t0
+    l_m_norm = l_m / l_m0
+
+    # 3. calculate forces
+    f_a = g_al(l_m_norm, 0.45)
+    f_p = g_pl(l_m_norm, 5.5, 0.3)
+
+    f = f0 * (f_a * activation + f_p) * df.cos(pen)
 
     for i in range(m_start, m_end):
-        compute_muscle_force(i, body_X_s, body_v_s, muscle_links, muscle_points, activation, body_f_s)
-    
+        compute_muscle_force(i, body_X_s, body_v_s, muscle_links, muscle_points, f, body_f_s)
 
 # compute transform across a joint
 @df.func
