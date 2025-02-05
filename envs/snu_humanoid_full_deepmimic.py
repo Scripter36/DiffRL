@@ -39,8 +39,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
                  stochastic_init=False, MM_caching_frequency=1):
 
         self.filter = {}
-        self.num_joint_q = 71 - 7
-        self.num_joint_qd = 56 - 6
+        self.num_joint_q = 71
+        self.num_joint_qd = 56
         self.num_muscles = 284
         num_obs = 187
 
@@ -243,8 +243,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
                 # add the observations and reference poses
                 # relative reference pos
                 ref_root_transform = self.reference_state.joint_q.view(self.num_envs, -1)[:, 0:7]
-                # ref_relative_body_X_sc = tu.to_local_frame_spatial(self.reference_state.body_X_sc.view(self.num_envs, -1, 7).clone(), ref_root_transform).view(-1, 7)
-                ref_relative_body_X_sc = self.reference_state.body_X_sc.view(-1, 7).clone()
+                ref_relative_body_X_sc = tu.to_local_frame_spatial(self.reference_state.body_X_sc.view(self.num_envs, -1, 7).clone(), ref_root_transform).view(-1, 7)
                 for s in self.skeletons:
                     for mesh, link in s.mesh_map.items():
 
@@ -303,10 +302,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
                     # return torch.clip(torch.nan_to_num(grad, 0.0, 100.0, -100.0, out=grad), -100.0, 100.0)
                     nan_count = torch.isnan(grad).sum()
                     inf_count = torch.isinf(grad).sum()
-                    big_count = (torch.abs(grad) > 1e6).sum()
                     # TODO: too verbose; find a better way to handle this
                     # print(f'{name} grad nan count: {nan_count}, inf count: {inf_count}, big count: {big_count}.')
-                    err_count = nan_count + inf_count + big_count
                     if 0 < nan_count < 10:
                         print(f'{name} grad nan index: {torch.nonzero(torch.isnan(grad)).squeeze(-1)}')
                     if 0 < inf_count < 10:
@@ -326,7 +323,6 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.actions = actions.clone()
 
         # simulate the model
-        # print the norm of joint_qd
         for ci in range(self.inv_control_freq):
             self.model.muscle_activation = actions.view(-1) * self.muscle_strengths
 
@@ -337,10 +333,6 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # update the reference model
         with torch.no_grad():
             self.update_reference_model()
-
-        # reset pelvis rotation / speed
-        # self.state.joint_q.view(self.num_envs, -1)[:, 3:7] = self.reference_state.joint_q.view(self.num_envs, -1)[:, 3:7]
-        # self.state.joint_qd.view(self.num_envs, -1)[:, 0:6] = 0.0
 
         # rehook!
         if self.state.joint_q.requires_grad:
@@ -471,8 +463,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         # DeepMimic states (observations): each link's position and rotation relative to the root joint, phase of the motion
         # 1. compute relative body X_sc
-        # relative_body_X_sc = tu.to_local_frame_spatial(self.state.body_X_sc.view(self.num_envs, -1, 7).clone(), root_transform)
-        relative_body_X_sc = self.state.body_X_sc.view(self.num_envs, -1, 7)
+        relative_body_X_sc = tu.to_local_frame_spatial(self.state.body_X_sc.view(self.num_envs, -1, 7).clone(), root_transform)
     
         # 2. compute phase of the motion
         progress_time = self.progress_buf * self.dt
@@ -481,8 +472,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         # 3. calculate the center of mass position, expressed in the local frame
         com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.state.body_X_sm.view(self.num_envs, -1, 7))
-        # com_pos_local = tu.to_local_frame_pos(com_pos.view(self.num_envs, 1, 3), root_transform)
-        com_pos_local = com_pos
+        com_pos_local = tu.to_local_frame_pos(com_pos.view(self.num_envs, 1, 3), root_transform)
 
         lin_vel = self.state.joint_qd.view(self.num_envs, -1)[:, 3:6]
         ang_vel = self.state.joint_qd.view(self.num_envs, -1)[:, 0:3]
@@ -524,8 +514,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
             # relative body X_sc for reference state
             relative_body_X_sc = self.obs_buf[:, 25:-1].view(self.num_envs, -1, 7)
             ref_root_transform = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
-            # ref_relative_body_X_sc = tu.to_local_frame_spatial(self.reference_state.body_X_sc.view(self.num_envs, -1, 7).clone(), ref_root_transform)
-            ref_relative_body_X_sc = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)
+            ref_relative_body_X_sc = tu.to_local_frame_spatial(self.reference_state.body_X_sc.view(self.num_envs, -1, 7).clone(), ref_root_transform)
             
             body_pos_diff = relative_body_X_sc[:, :, 0:3] - ref_relative_body_X_sc[:, :, 0:3]
 
@@ -548,8 +537,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
             # center-of-mass reward: exp(-10 * sum(com pos, ref com pos diff **2))
             com_pos_local = self.obs_buf[:, 14:17]
             ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
-            # ref_com_pos_local = tu.to_local_frame_pos(ref_com_pos.view(self.num_envs, 1, 3), ref_root_transform).view(self.num_envs, -1)
-            ref_com_pos_local = ref_com_pos
+            ref_com_pos_local = tu.to_local_frame_pos(ref_com_pos.view(self.num_envs, 1, 3), ref_root_transform).view(self.num_envs, -1)
             com_pos_diff = com_pos_local - ref_com_pos_local
             com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
 
@@ -565,8 +553,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
             # relative body X_sc for reference state
             relative_body_X_sc = self.obs_buf[:, 25:-1].view(self.num_envs, -1, 7)
             ref_root_transform = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
-            # ref_relative_body_X_sc = tu.to_local_frame_spatial(self.reference_state.body_X_sc.view(self.num_envs, -1, 7).clone(), ref_root_transform)
-            ref_relative_body_X_sc = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)
+            ref_relative_body_X_sc = tu.to_local_frame_spatial(self.reference_state.body_X_sc.view(self.num_envs, -1, 7).clone(), ref_root_transform)
 
             body_pos_diff = relative_body_X_sc[:, :, 0:3] - ref_relative_body_X_sc[:, :, 0:3]
             pos_reward = -torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1)
@@ -611,8 +598,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.rew_buf = imitation_reward
 
         # reset agents (early termination)
-        # self.reset_buf = torch.where(self.obs_buf[:, 8] < self.termination_height, torch.ones_like(self.reset_buf),
-        #                                 self.reset_buf)
+        self.reset_buf = torch.where(self.obs_buf[:, 8] < self.termination_height, torch.ones_like(self.reset_buf),
+                                        self.reset_buf)
         
         # # if pos reward is less than -1, reset
         # body_pos_diff = relative_body_X_sc[:, :, 0:3] - ref_relative_body_X_sc[:, :, 0:3]
@@ -684,8 +671,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] = self.reference_joint_qd[frame_index[env_ids], :]
 
         # reset position
-        # self.state.joint_q.view(self.num_envs, -1)[env_ids, 0] = 0.0
-        # # ground height correction
-        # self.state.joint_q.view(self.num_envs, -1)[env_ids, 1] = 1.0
-        # self.state.joint_q.view(self.num_envs, -1)[env_ids, 2] = 0.0
+        self.state.joint_q.view(self.num_envs, -1)[env_ids, 0] = 0.0
+        # ground height correction
+        self.state.joint_q.view(self.num_envs, -1)[env_ids, 1] = 1.0
+        self.state.joint_q.view(self.num_envs, -1)[env_ids, 2] = 0.0
         # self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_from_angle_axis(torch.tensor([math.pi * 0.5]).repeat(len(env_ids)).to(self.device), torch.tensor([0.0, 1.0, 0.0]).view(1, -1).repeat(len(env_ids), 1).to(self.device))
