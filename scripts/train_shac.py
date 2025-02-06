@@ -102,6 +102,7 @@ if __name__ == '__main__':
         # if checkpoint is provided, load the run and get the parameters
         checkpoint_path = f'runs:/{run_id}/{checkpoint_name}'
         loaded_run = mlflow.get_run(run_id)
+        experiment_name = mlflow.get_experiment(loaded_run.info.experiment_id).name
         cfg_train = mlflow.artifacts.load_dict(loaded_run.info.artifact_uri + "/cfg_train.json")
         print('loaded parameters:', cfg_train)
     else:
@@ -146,7 +147,7 @@ if __name__ == '__main__':
                 traj_optimizer.load(checkpoint_path)
             traj_optimizer.train()
     else:
-        traj_optimizer = shac.SHAC(cfg_train)
+        traj_optimizer = shac.SHAC(cfg_train, render_name=experiment_name)
         if checkpoint_path is not None:
             traj_optimizer.load(checkpoint_path)
         traj_optimizer.run(cfg_train['params']['config']['player']['games_num'])

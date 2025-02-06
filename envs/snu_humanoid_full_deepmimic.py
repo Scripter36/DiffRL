@@ -36,7 +36,7 @@ from utils import torch_utils as tu
 class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
     def __init__(self, render=False, device='cuda:0', num_envs=4096, seed=0, episode_length=1000, no_grad=True,
-                 stochastic_init=False, MM_caching_frequency=1):
+                 stochastic_init=False, MM_caching_frequency=1, render_name=None):
         # df.config.verify_fp = True
 
         self.filter = {}
@@ -54,7 +54,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         num_act = self.num_muscles
 
         super(SNUHumanoidFullDeepMimicEnv, self).__init__(num_envs, num_obs, num_act, episode_length, MM_caching_frequency, seed,
-                                                 no_grad, render, device)
+                                                 no_grad, render, render_name, device)
 
         self.stochastic_init = stochastic_init
 
@@ -71,7 +71,9 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # -----------------------
         # set up Usd renderer
         if (self.visualize):
-            self.stage = Usd.Stage.CreateInMemory("HumanoidSNUDeepMimic_" + str(self.num_envs) + ".usd")
+            if self.render_name is None:
+                self.render_name = "HumanoidSNUDeepMimic_" + str(self.num_envs)
+            self.stage = Usd.Stage.CreateInMemory(self.render_name + ".usd")
 
             self.renderer = df.UsdRenderer(self.model, self.stage)
             self.render_time = 0.0
@@ -272,10 +274,11 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
     def finalize_play(self):
         if self.visualize:
             try:
-                self.stage.GetRootLayer().Export("outputs/HumanoidSNUDeepMimic_" + str(self.num_envs) + ".usd")
-                print(f"Saved to outputs/HumanoidSNUDeepMimic_{self.num_envs}.usd")
+                self.stage.GetRootLayer().Export("outputs/" + self.render_name + ".usd")
+                print(f"Saved to outputs/{self.render_name}.usd")
             except Exception as e:
                 print(f"USD save error: {e}")
+
 
     def step(self, actions):
         actions = actions.view((self.num_envs, self.num_actions))

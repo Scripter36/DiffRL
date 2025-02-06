@@ -51,11 +51,14 @@ class SHACCheckpoint(nn.Module):
         raise NotImplementedError("This checkpoint model is for storage only and not for inference")
 
 class SHAC:
-    def __init__(self, cfg, checkpoint=None):
+    def __init__(self, cfg, checkpoint=None, render_name=None):
         self.cfg = cfg
         seed = cfg["params"]["general"]["seed"]
         if seed is not None:
             seeding(seed)
+        if render_name is None:
+            # use experiment name
+            render_name = mlflow.get_experiment(mlflow_manager.active_run.info.experiment_id).name
         env_fn = getattr(envs, cfg["params"]["diff_env"]["name"])
         self.env = env_fn(num_envs = cfg["params"]["config"]["num_actors"], \
                             device = cfg["params"]["general"]["device"], \
@@ -64,7 +67,8 @@ class SHAC:
                             episode_length=cfg["params"]["diff_env"].get("episode_length", 250), \
                             stochastic_init = cfg["params"]["diff_env"].get("stochastic_env", True), \
                             MM_caching_frequency = cfg["params"]['diff_env'].get('MM_caching_frequency', 1), \
-                            no_grad = False)
+                            no_grad = False, \
+                            render_name = render_name)
 
         print('num_envs = ', self.env.num_envs)
         print('num_actions = ', self.env.num_actions)

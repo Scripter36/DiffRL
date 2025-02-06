@@ -2,7 +2,7 @@ import os
 import mlflow
 
 from dotenv import load_dotenv
-load_dotenv()  # This loads variables from .env into os.environ
+load_dotenv(override=True)  # This loads variables from .env into os.environ
 
 # Set the MLFlow tracking URI if the environment variable is provided.
 tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
