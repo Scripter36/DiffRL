@@ -105,8 +105,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.heading_vec = self.z_unit_tensor.clone()
         self.inv_start_rot = tu.quat_conjugate(self.start_rotation).repeat((self.num_envs, 1))
 
-        self.basis_vec0 = self.heading_vec.clone()
-        self.basis_vec1 = self.up_vec.clone()
+        self.basis_vec0 = self.z_unit_tensor.clone()
+        self.basis_vec1 = self.y_unit_tensor.clone()
 
         self.targets = tu.to_torch([0.0, 0.0, 10000.0], device=self.device, requires_grad=False).repeat(
             (self.num_envs, 1))
@@ -240,7 +240,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
                         if link != -1:
                             link_transform = ref_relative_body_X_sc[link]
-                            link_transform[1] += 2
+                            link_transform[0] += 2
+                            link_transform[1] += 1
                             X_sc = df.transform_expand(link_transform.tolist())
 
                             mesh_path = os.path.join(render_asset_folder, "OBJ/" + mesh + ".usd")
@@ -253,8 +254,11 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
                         if link != -1:
                             link_transform = relative_body_X_sc[link]
-                            link_transform[1] += 2
+                            link_transform[0] += 2
+                            link_transform[1] += 1
                             X_sc = df.transform_expand(link_transform.tolist())
+
+
 
                             mesh_path = os.path.join(render_asset_folder, "OBJ/" + mesh + ".usd")
 
@@ -266,7 +270,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
                 # com_pos_local: add sphere
                 com_pos_local = self.obs_buf[0, 14:17].view(-1).clone()
-                com_pos_local[1] += 2
+                com_pos_local[0] += 2
+                com_pos_local[1] += 1
                 self.renderer.add_sphere(com_pos_local.tolist(), 0.1, "com", self.render_time)
 
             self.renderer.update(self.state, self.render_time)
@@ -476,8 +481,9 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         target_dirs = tu.normalize(to_target)
 
-        up_vec = tu.quat_rotate(root_rot, self.basis_vec1)
-        heading_vec = tu.quat_rotate(root_rot, self.basis_vec0)
+        up_vec = tu.quat_rotate(torso_rot, self.basis_vec1)
+        heading_vec = tu.quat_rotate(torso_rot, self.basis_vec0)
+        # print(f'upness: {up_vec[:, 1:2]}, headingness: {(heading_vec * target_dirs).sum(dim=-1).unsqueeze(-1)}')
 
         # TODO: check if we can add phase (which is not differentiable) in observations
         self.obs_buf = torch.cat([
@@ -665,6 +671,6 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # reset position
         self.state.joint_q.view(self.num_envs, -1)[env_ids, 0] = 0.0
         # ground height correction
-        self.state.joint_q.view(self.num_envs, -1)[env_ids, 1] = 1.0
+        self.state.joint_q.view(self.num_envs, -1)[env_ids, 1] = 1.0 - 0.06
         self.state.joint_q.view(self.num_envs, -1)[env_ids, 2] = 0.0
         # self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_from_angle_axis(torch.tensor([math.pi * 0.5]).repeat(len(env_ids)).to(self.device), torch.tensor([0.0, 1.0, 0.0]).view(1, -1).repeat(len(env_ids), 1).to(self.device))
