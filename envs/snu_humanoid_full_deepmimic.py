@@ -585,6 +585,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         # get z-axis velocity
         progress_reward = self.obs_buf[:, 19]
+        # walking: speed is limited to 0.75m/s, so clip the reward
+        progress_reward = torch.where(progress_reward > 0.75, 0.75, progress_reward)
 
         goal_reward = up_reward + heading_reward + height_reward + progress_reward
 
