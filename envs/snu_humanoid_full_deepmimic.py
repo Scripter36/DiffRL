@@ -583,7 +583,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         act_penalty = torch.sum(torch.abs(self.actions),
                                 dim=-1) * self.action_penalty  # torch.sum(self.actions ** 2, dim = -1) * self.action_penalty
 
-        progress_reward = self.obs_buf[:, 17]
+        # get z-axis velocity
+        progress_reward = self.obs_buf[:, 19]
 
         goal_reward = up_reward + heading_reward + height_reward + progress_reward
 
