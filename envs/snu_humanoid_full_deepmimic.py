@@ -102,13 +102,13 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # initialize some data used later on
         # todo - switch to z-up
         self.up_vec = self.y_unit_tensor.clone()
-        self.heading_vec = self.x_unit_tensor.clone()
+        self.heading_vec = self.z_unit_tensor.clone()
         self.inv_start_rot = tu.quat_conjugate(self.start_rotation).repeat((self.num_envs, 1))
 
         self.basis_vec0 = self.heading_vec.clone()
         self.basis_vec1 = self.up_vec.clone()
 
-        self.targets = tu.to_torch([10000.0, 0.0, 0.0], device=self.device, requires_grad=False).repeat(
+        self.targets = tu.to_torch([0.0, 0.0, 10000.0], device=self.device, requires_grad=False).repeat(
             (self.num_envs, 1))
 
         self.start_pos = []
