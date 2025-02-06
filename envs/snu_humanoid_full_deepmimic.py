@@ -283,7 +283,6 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
     def step(self, actions):
         actions = actions.view((self.num_envs, self.num_actions))
 
-        # AddBackward error??
         actions = torch.clip(actions, -1., 1.) * 0.5 + 0.5
 
         ##### an ugly fix for simulation nan values #### # reference: https://github.com/pytorch/pytorch/issues/15131
@@ -534,7 +533,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
             com_pos_diff = com_pos_local - ref_com_pos_local
             com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
 
-            imitation_reward = pos_reward.clone()
+            imitation_reward = w_p * pos_reward + w_v * vel_reward + w_e * end_effector_reward + w_c * com_reward
 
         elif reward_type == 'diffmimic':
             # diffMimic reward: pos + rot + vel + ang
@@ -588,7 +587,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # print the mean reward
         # print(f"mean imitation reward: {torch.mean(imitation_reward).item()}, mean goal reward: {torch.mean(goal_reward).item()}")
 
-        self.rew_buf = imitation_reward
+        self.rew_buf = w_g * goal_reward + w_i * imitation_reward
 
         # reset agents (early termination)
         self.reset_buf = torch.where(self.obs_buf[:, 8] < self.termination_height, torch.ones_like(self.reset_buf),
