@@ -375,7 +375,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
             # randomization
             if self.stochastic_init:
                 self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = -24
+                self.offset_buf[env_ids] = -120
                 self.copy_ref_pos_to_state(env_ids)
                 # # start pos randomization
                 self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] = self.state.joint_q.view(self.num_envs, -1)[
@@ -391,7 +391,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
                             torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
             else:
                 self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = -24
+                self.offset_buf[env_ids] = -120
                 self.copy_ref_pos_to_state(env_ids)
 
             # clear action
