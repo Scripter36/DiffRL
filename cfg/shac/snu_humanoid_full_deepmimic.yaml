@@ -1,4 +1,4 @@
-params:  
+params:
   diff_env:
     name: SNUHumanoidFullDeepMimicEnv
     stochastic_env: True
@@ -31,7 +31,7 @@ params:
     gamma: 0.99
     betas: [0.7, 0.95] # adam
     max_epochs: 2000
-    steps_num: 32
+    steps_num: 64
     grad_norm: 1
     truncate_grads: True
     num_actors: 64

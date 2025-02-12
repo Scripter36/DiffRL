@@ -1191,11 +1191,11 @@ def eval_rigid_contacts_art(
     #ft = vt*kf
 
     # Coulomb friction (box)
-    lower = mu * (fn + fd)   # negative
-    upper = 0.0 - lower      # positive, workaround for no unary ops
+    # lower = mu * (fn + fd)   # negative
+    # upper = 0.0 - lower      # positive, workaround for no unary ops
 
-    vx = df.clamp(dot(float3(kf, 0.0, 0.0), vt), lower, upper)
-    vz = df.clamp(dot(float3(0.0, 0.0, kf), vt), lower, upper)
+    # vx = df.clamp(dot(float3(kf, 0.0, 0.0), vt), lower, upper)
+    # vz = df.clamp(dot(float3(0.0, 0.0, kf), vt), lower, upper)
 
     # Coulomb friction (smooth, but gradients are numerically unstable around |vt| = 0)
     ft = df.normalize(vt)*df.min(kf*df.length(vt), 0.0 - mu*c*ke) * df.step(c)

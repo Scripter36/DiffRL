@@ -58,6 +58,9 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         self.stochastic_init = stochastic_init
 
+        self.offset_buf = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.long, requires_grad=False)
+
         self.init_sim()
 
         # other parameters
@@ -82,8 +85,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.builder = df.ModelBuilder()
         self.reference_builder = df.ModelBuilder()
 
-        self.dt = 1.0 / 60.0
-        self.sim_substeps = 48
+        self.dt = 1.0 / 120.0
+        self.sim_substeps = 24
 
         self.sim_dt = self.dt
 
@@ -128,25 +131,16 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
             self.skeletons.append(lu.Skeleton(asset_path, muscle_path, self.builder, self.filter,
                                        stiffness=5.0,
                                        damping=2.0, # stiffness and damping = k_p, k_d in PD control
-                                       contact_ke=5e3,
-                                       contact_kd=2e3,
-                                       contact_kf=1e3,
+                                       contact_ke=5e3 * 2,
+                                       contact_kd=2e3 * 2,
+                                       contact_kf=1e3 * 2,
                                        contact_mu=0.5,
                                        limit_ke=1e3,
                                        limit_kd=1e1,
                                        armature=0.05))
 
             # load reference skeleton for this skeleton
-            lu.Skeleton(asset_path, None, self.reference_builder, self.filter,
-                                       stiffness=5.0,
-                                       damping=2.0, # stiffness and damping = k_p, k_d in PD control
-                                       contact_ke=5e3,
-                                       contact_kd=2e3,
-                                       contact_kf=1e3,
-                                       contact_mu=0.5,
-                                       limit_ke=1e3,
-                                       limit_kd=1e1,
-                                       armature=0.05)
+            lu.Skeleton(asset_path, None, self.reference_builder, self.filter)
 
         num_q = int(len(self.builder.joint_q) / self.num_environments)
         num_qd = int(len(self.builder.joint_qd) / self.num_environments)
@@ -322,6 +316,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # simulate the model
         for ci in range(self.inv_control_freq):
             self.model.muscle_activation = actions.view(-1)
+            # self.model.muscle_activation = torch.zeros_like(self.model.muscle_activation)
 
             self.state = self.integrator.forward(self.model, self.state, self.sim_dt, self.sim_substeps,
                                                  self.MM_caching_frequency)
@@ -380,21 +375,23 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
             # randomization
             if self.stochastic_init:
                 self.progress_buf[env_ids] = 0
+                self.offset_buf[env_ids] = -24
                 self.copy_ref_pos_to_state(env_ids)
                 # # start pos randomization
-                # self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] = self.state.joint_q.view(self.num_envs, -1)[
-                #                                                            env_ids, 0:3] + 0.05 * (torch.rand(
-                #     size=(len(env_ids), 3), device=self.device) - 0.5) + torch.tensor([0.0, 0.025, 0.0], device=self.device).unsqueeze(0).repeat(len(env_ids), 1)
+                self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] = self.state.joint_q.view(self.num_envs, -1)[
+                                                                           env_ids, 0:3] + 0.05 * (torch.rand(
+                    size=(len(env_ids), 3), device=self.device) - 0.5) + torch.tensor([0.0, 0.025, 0.0], device=self.device).unsqueeze(0).repeat(len(env_ids), 1)
                 # # start rot randomization
-                # angle = (torch.rand(len(env_ids), device=self.device) - 0.5) * np.pi / 36.0
-                # axis = torch.nn.functional.normalize(torch.rand((len(env_ids), 3), device=self.device) - 0.5)
-                # self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_mul(
-                #     self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7], tu.quat_from_angle_axis(angle, axis))
+                angle = (torch.rand(len(env_ids), device=self.device) - 0.5) * np.pi / 36.0
+                axis = torch.nn.functional.normalize(torch.rand((len(env_ids), 3), device=self.device) - 0.5)
+                self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_mul(
+                    self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7], tu.quat_from_angle_axis(angle, axis))
                 # # start vel randomization
                 self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] += 0.05 * (
                             torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
             else:
                 self.progress_buf[env_ids] = 0
+                self.offset_buf[env_ids] = -24
                 self.copy_ref_pos_to_state(env_ids)
 
             # clear action
@@ -418,6 +415,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
                 checkpoint['joint_qd'] = self.state.joint_qd.clone()
                 checkpoint['actions'] = self.actions.clone()
                 checkpoint['progress_buf'] = self.progress_buf.clone()
+                checkpoint['obs_buf'] = self.obs_buf.clone()
 
             current_joint_q = checkpoint['joint_q'].clone()
             current_joint_qd = checkpoint['joint_qd'].clone()
@@ -426,6 +424,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
             self.state.joint_qd = current_joint_qd
             self.actions = checkpoint['actions'].clone()
             self.progress_buf = checkpoint['progress_buf'].clone()
+            self.obs_buf = checkpoint['obs_buf'].clone()
 
     def initialize_trajectory(self):
         """
@@ -443,6 +442,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         checkpoint['joint_qd'] = self.state.joint_qd.clone()
         checkpoint['actions'] = self.actions.clone()
         checkpoint['progress_buf'] = self.progress_buf.clone()
+        checkpoint['obs_buf'] = self.obs_buf.clone()
 
         return checkpoint
 
@@ -463,9 +463,9 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         relative_body_X_sc = tu.to_local_frame_spatial(self.state.body_X_sc.view(self.num_envs, -1, 7).clone(), root_transform)
     
         # 2. compute phase of the motion
-        progress_time = self.progress_buf * self.dt
+        progress_time = (self.progress_buf + self.offset_buf) * self.dt
         max_time = self.reference_frame_time * self.reference_frame_count
-        phase = (progress_time / max_time) % 1.0
+        phase = torch.clamp((progress_time / max_time) % 1.0, min=0.0, max=1.0)
 
         # 3. calculate the center of mass position, expressed in the local frame
         com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.state.body_X_sm.view(self.num_envs, -1, 7))
@@ -604,8 +604,10 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         
         # # if pos reward is less than -1, reset
         # body_pos_diff = relative_body_X_sc[:, :, 0:3] - ref_relative_body_X_sc[:, :, 0:3]
-        self.reset_buf = torch.where(torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1) > 0.2, torch.ones_like(self.reset_buf),
-                                        self.reset_buf)
+        # self.reset_buf = torch.where(torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1) > 0.2, torch.ones_like(self.reset_buf),
+        #                                 self.reset_buf)
+        
+        # normal termination
         self.reset_buf = torch.where(self.progress_buf > self.episode_length - 1, torch.ones_like(self.reset_buf),
                                      self.reset_buf)
 
@@ -633,7 +635,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         Update the reference model's state from the phase of the motion.
         """
         
-        frame_index = torch.round((self.progress_buf * self.dt) / self.reference_frame_time).long() % self.reference_frame_count
+        frame_index = torch.clamp(torch.round((self.progress_buf + self.offset_buf) * self.dt / self.reference_frame_time).long(), min=0) % self.reference_frame_count
         next_state = self.reference_model.state()
 
         # update joint_q and joint_qd
@@ -666,7 +668,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.state.joint_q = self.state.joint_q.clone()
         self.state.joint_qd = self.state.joint_qd.clone()
 
-        frame_index = torch.round((self.progress_buf * self.dt) / self.reference_frame_time).long() % self.reference_joint_q.shape[0]
+        frame_index = torch.clamp(torch.round((self.progress_buf + self.offset_buf) * self.dt / self.reference_frame_time).long(), min=0) % self.reference_frame_count
         # masked values are 0, so we don't need to use mask to select valid values
         self.state.joint_q.view(self.num_envs, -1)[env_ids, :] = self.reference_joint_q[frame_index[env_ids], :]
         self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] = self.reference_joint_qd[frame_index[env_ids], :]
@@ -674,6 +676,6 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # reset position
         self.state.joint_q.view(self.num_envs, -1)[env_ids, 0] = 0.0
         # ground height correction
-        self.state.joint_q.view(self.num_envs, -1)[env_ids, 1] = 1.0 - 0.06
+        self.state.joint_q.view(self.num_envs, -1)[env_ids, 1] = 1.0 - 0.05
         self.state.joint_q.view(self.num_envs, -1)[env_ids, 2] = 0.0
         # self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_from_angle_axis(torch.tensor([math.pi * 0.5]).repeat(len(env_ids)).to(self.device), torch.tensor([0.0, 1.0, 0.0]).view(1, -1).repeat(len(env_ids), 1).to(self.device))
