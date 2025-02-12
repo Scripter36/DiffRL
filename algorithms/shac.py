@@ -485,7 +485,7 @@ class SHAC:
 
             self.time_report.start_timer("backward simulation")
 
-            if self.use_grad_per_env:   
+            if self.use_grad_per_env:
                 parameters = list(self.actor.parameters())
                 final_grads = []
                 self.valid_env_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)

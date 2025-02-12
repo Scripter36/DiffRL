@@ -60,6 +60,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         self.offset_buf = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.long, requires_grad=False)
+        self.start_frame_offset = 0
 
         self.init_sim()
 
@@ -131,9 +132,9 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
             self.skeletons.append(lu.Skeleton(asset_path, muscle_path, self.builder, self.filter,
                                        stiffness=5.0,
                                        damping=2.0, # stiffness and damping = k_p, k_d in PD control
-                                       contact_ke=5e3 * 2,
-                                       contact_kd=2e3 * 2,
-                                       contact_kf=1e3 * 2,
+                                       contact_ke=5e3,
+                                       contact_kd=2e3,
+                                       contact_kf=1e3,
                                        contact_mu=0.5,
                                        limit_ke=1e3,
                                        limit_kd=1e1,
@@ -374,8 +375,9 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
             # randomization
             if self.stochastic_init:
-                self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = -120
+                self.progress_buf[env_ids] = -120
+                self.offset_buf[env_ids] = 0
+                self.start_frame_offset = 0
                 self.copy_ref_pos_to_state(env_ids)
                 # # start pos randomization
                 self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] = self.state.joint_q.view(self.num_envs, -1)[
@@ -390,8 +392,9 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
                 self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] += 0.05 * (
                             torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
             else:
-                self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = -120
+                self.progress_buf[env_ids] = -120
+                self.offset_buf[env_ids] = 0
+                self.start_frame_offset = 0
                 self.copy_ref_pos_to_state(env_ids)
 
             # clear action
@@ -463,9 +466,9 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         relative_body_X_sc = tu.to_local_frame_spatial(self.state.body_X_sc.view(self.num_envs, -1, 7).clone(), root_transform)
     
         # 2. compute phase of the motion
-        progress_time = (self.progress_buf + self.offset_buf) * self.dt
+        progress_time = torch.clamp((self.progress_buf + self.offset_buf) * self.dt, min=0.0)
         max_time = self.reference_frame_time * self.reference_frame_count
-        phase = torch.clamp((progress_time / max_time) % 1.0, min=0.0, max=1.0)
+        phase = ((progress_time + self.start_frame_offset * self.dt) / max_time) % 1.0
 
         # 3. calculate the center of mass position, expressed in the local frame
         com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.state.body_X_sm.view(self.num_envs, -1, 7))
@@ -634,8 +637,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         """
         Update the reference model's state from the phase of the motion.
         """
-        
-        frame_index = torch.clamp(torch.round((self.progress_buf + self.offset_buf) * self.dt / self.reference_frame_time).long(), min=0) % self.reference_frame_count
+        frame_index = torch.round((torch.clamp(self.progress_buf + self.offset_buf, min=0) + self.start_frame_offset) * self.dt / self.reference_frame_time).long() % self.reference_frame_count
         next_state = self.reference_model.state()
 
         # update joint_q and joint_qd
@@ -668,7 +670,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.state.joint_q = self.state.joint_q.clone()
         self.state.joint_qd = self.state.joint_qd.clone()
 
-        frame_index = torch.clamp(torch.round((self.progress_buf + self.offset_buf) * self.dt / self.reference_frame_time).long(), min=0) % self.reference_frame_count
+        frame_index = torch.round((torch.clamp(self.progress_buf + self.offset_buf, min=0) + self.start_frame_offset) * self.dt / self.reference_frame_time).long() % self.reference_frame_count
         # masked values are 0, so we don't need to use mask to select valid values
         self.state.joint_q.view(self.num_envs, -1)[env_ids, :] = self.reference_joint_q[frame_index[env_ids], :]
         self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] = self.reference_joint_qd[frame_index[env_ids], :]
