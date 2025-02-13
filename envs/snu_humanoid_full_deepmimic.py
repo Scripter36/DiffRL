@@ -161,7 +161,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         # load reference motion
         self.reference_frame_time, self.reference_frame_count, self.reference_joint_q, self.reference_joint_q_mask, self.reference_joint_qd = \
-            lu.load_bvh(os.path.join(self.asset_folder, "motion/walk.bvh"), self.skeletons[0].bvh_map, self.model, self.dt)
+            lu.load_bvh(os.path.join(self.asset_folder, "motion/backflip.bvh"), self.skeletons[0].bvh_map, self.model, self.dt)
 
         # end effector indices
         self.end_effector_indices = [4, 9, 14, 18, 22] # FootThumbR, FootThumbL, Head, HandR, HandL
@@ -376,7 +376,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
             # randomization
             if self.stochastic_init:
                 self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = -60
+                self.offset_buf[env_ids] = torch.randint(0, math.ceil(self.reference_frame_time * self.reference_frame_count / self.dt), (len(env_ids),), device=self.device)
                 self.start_frame_offset = 0
                 self.copy_ref_pos_to_state(env_ids)
                 # # start pos randomization
@@ -393,7 +393,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
                             torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
             else:
                 self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = -60
+                self.offset_buf[env_ids] = 0
                 self.start_frame_offset = 0
                 self.copy_ref_pos_to_state(env_ids)
 
@@ -599,7 +599,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # print the mean reward
         # print(f"mean imitation reward: {torch.mean(imitation_reward).item()}, mean goal reward: {torch.mean(goal_reward).item()}")
 
-        self.rew_buf = w_g * goal_reward + w_i * imitation_reward
+        self.rew_buf = imitation_reward
 
         # reset agents (early termination)
         self.reset_buf = torch.where(self.obs_buf[:, 8] < self.termination_height, torch.ones_like(self.reset_buf),
@@ -607,8 +607,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         
         # # if pos reward is less than -1, reset
         # body_pos_diff = relative_body_X_sc[:, :, 0:3] - ref_relative_body_X_sc[:, :, 0:3]
-        # self.reset_buf = torch.where(torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1) > 0.2, torch.ones_like(self.reset_buf),
-        #                                 self.reset_buf)
+        self.reset_buf = torch.where(torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1) > 0.4, torch.ones_like(self.reset_buf),
+                                        self.reset_buf)
         
         # normal termination
         self.reset_buf = torch.where(self.progress_buf > self.episode_length - 1, torch.ones_like(self.reset_buf),
