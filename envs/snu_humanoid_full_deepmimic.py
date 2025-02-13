@@ -77,9 +77,9 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         if (self.visualize):
             if self.render_name is None:
                 self.render_name = "HumanoidSNUDeepMimic_" + str(self.num_envs)
-            self.stage = Usd.Stage.CreateInMemory(self.render_name + ".usd")
+            self.stage = Usd.Stage.CreateNew("outputs/" + self.render_name + ".usd")
 
-            self.renderer = df.UsdRenderer(self.model, self.stage)
+            self.renderer = df.UsdRenderer(self.model, self.stage, draw_ground=False)
             self.render_time = 0.0
 
     def init_sim(self):
@@ -274,7 +274,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
     def finalize_play(self):
         if self.visualize:
             try:
-                self.stage.GetRootLayer().Export("outputs/" + self.render_name + ".usd")
+                self.stage.Save()
                 print(f"Saved to outputs/{self.render_name}.usd")
             except Exception as e:
                 print(f"USD save error: {e}")
@@ -375,8 +375,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
             # randomization
             if self.stochastic_init:
-                self.progress_buf[env_ids] = -120
-                self.offset_buf[env_ids] = 0
+                self.progress_buf[env_ids] = 0
+                self.offset_buf[env_ids] = -60
                 self.start_frame_offset = 0
                 self.copy_ref_pos_to_state(env_ids)
                 # # start pos randomization
@@ -392,8 +392,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
                 self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] += 0.05 * (
                             torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
             else:
-                self.progress_buf[env_ids] = -120
-                self.offset_buf[env_ids] = 0
+                self.progress_buf[env_ids] = 0
+                self.offset_buf[env_ids] = -60
                 self.start_frame_offset = 0
                 self.copy_ref_pos_to_state(env_ids)
 
@@ -574,8 +574,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
             imitation_reward = 0.0
 
         # goal reward
-        up_reward = 0.1 * self.obs_buf[:, 23]
-        heading_reward = self.obs_buf[:, 24]
+        up_reward = 0.5 * self.obs_buf[:, 23]
+        heading_reward = 0.5 * self.obs_buf[:, 24]
 
         height_diff = self.obs_buf[:, 8] - self.termination_height
         height_reward = torch.clip(height_diff, -1.0, self.termination_tolerance)
@@ -593,8 +593,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         goal_reward = up_reward + heading_reward + height_reward + progress_reward
 
-        w_g = 0.1
-        w_i = 0.9
+        w_g = 0.05
+        w_i = 0.95
 
         # print the mean reward
         # print(f"mean imitation reward: {torch.mean(imitation_reward).item()}, mean goal reward: {torch.mean(goal_reward).item()}")
