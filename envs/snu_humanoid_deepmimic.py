@@ -37,7 +37,6 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
     def __init__(self, render=False, device='cuda:0', num_envs=4096, seed=0, episode_length=1000, no_grad=True,
                  stochastic_init=False, MM_caching_frequency=1, render_name=None):
-        
         self.filter = { "Pelvis", "FemurR", "TibiaR", "TalusR", "FootThumbR", "FootPinkyR", "FemurL", "TibiaL", "TalusL", "FootThumbL", "FootPinkyL"}
 
         self.skeletons = []
@@ -176,14 +175,10 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.state = self.model.state()
         self.reference_state = self.reference_model.state()
         self.reference_frame = torch.zeros((self.num_envs), dtype=torch.long, device=self.device)
-        self.reference_loop_count = torch.zeros((self.num_envs), dtype=torch.long, device=self.device)
 
         # move ref pos to the initial pos
         self.start_pos = torch.tensor((0.0, 0.95, 0.0), dtype=torch.float32, device=self.device)
-        self.reference_pos_offset = torch.zeros((self.num_envs, 3), device=self.device)
-        for i in range(self.num_envs):
-            original_pos = self.reference_state.joint_q.view(self.num_envs, -1)[i, 0:3]
-            self.reference_pos_offset[i] = self.start_pos - original_pos
+        self.reference_pos_offset = self.start_pos.unsqueeze(0).repeat(self.num_envs, 1) - self.reference_joint_q[0, 0:3]
 
         if (self.model.ground):
             self.model.collide(self.state)
@@ -610,21 +605,21 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         """
         Update the reference model's state from the phase of the motion.
         """
-        frame_index = torch.round((torch.clamp(self.progress_buf + self.offset_buf, min=0) + self.start_frame_offset) * self.dt / self.reference_frame_time).long() % self.reference_frame_count
+        frame_indices = torch.round((torch.clamp(self.progress_buf + self.offset_buf, min=0) + self.start_frame_offset) * self.dt / self.reference_frame_time).long() % self.reference_frame_count
         next_state = self.reference_model.state()
 
         # if new frame index is less than the previous frame index, it means the reference model has looped
-        loop_indices = torch.nonzero(frame_index < self.reference_frame).squeeze(-1)
-        self.reference_loop_count[loop_indices] += 1
+        loop_indices = torch.nonzero(frame_indices < self.reference_frame).squeeze(-1)
         # if looped, update the offset to connect the loop
-        self.reference_pos_offset[loop_indices] += self.reference_joint_q[frame_index[loop_indices], :3] - self.reference_joint_q[self.reference_frame[loop_indices], :3]
+        self.reference_pos_offset[loop_indices] += self.reference_joint_q[self.reference_frame[loop_indices], :3] - self.reference_joint_q[frame_indices[loop_indices], :3]
+        self.reference_frame = frame_indices
 
         # update joint_q and joint_qd
-        next_state.joint_q[:] = self.reference_joint_q[frame_index, :].view(-1)
-        next_state.joint_qd[:] = self.reference_joint_qd[frame_index, :].view(-1)
+        next_state.joint_q[:] = self.reference_joint_q[frame_indices, :].view(-1)
+        next_state.joint_qd[:] = self.reference_joint_qd[frame_indices, :].view(-1)
         
         # apply the offset to the reference model
-        next_state.joint_q.view(self.num_envs, -1)[loop_indices, :3] += self.reference_pos_offset[loop_indices]
+        next_state.joint_q.view(self.num_envs, -1)[:, :3] += self.reference_pos_offset
 
         # perform forward kinematics
         body_X_sc, body_X_sm = eval_rigid_fk_grad(self.reference_model, next_state.joint_q)
