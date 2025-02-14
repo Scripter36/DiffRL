@@ -188,8 +188,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.copy_ref_pos_to_state()
 
     def render(self, mode='human'):
-        render_asset_folder = self.asset_folder
-
+        render_asset_folder = 'C:/Users/1350a/dev/working/DiffRL/envs/assets/snu'
         if self.visualize:
             self.render_time += self.dt * self.inv_control_freq
             with torch.no_grad():
@@ -564,8 +563,8 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
         goal_reward = up_reward + heading_reward + height_reward + progress_reward
 
-        w_g = 0.05
-        w_i = 0.95
+        w_g = 0.2
+        w_i = 0.8
 
         # print the mean reward
         # print(f"mean imitation reward: {torch.mean(imitation_reward).item()}, mean goal reward: {torch.mean(goal_reward).item()}")
