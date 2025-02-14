@@ -249,7 +249,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
                             self.renderer.add_mesh(f'{mesh}_relative_refpos', mesh_path, X_sc, 1.0, self.render_time)
                 # relative
-                relative_body_X_sc = self.obs_buf[0, 25:-1].view(-1, 7).clone()
+                relative_body_X_sc = self.obs_buf[0, 18:-1].view(-1, 7).clone()
                 for s in self.skeletons:
                     for mesh, link in s.mesh_map.items():
 
@@ -270,7 +270,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                 self.renderer.add_sphere((10, self.obs_buf[0, -1], 10), 0.1, "phase", self.render_time)
 
                 # com_pos_local: add sphere
-                com_pos_local = self.obs_buf[0, 14:17].view(-1).clone()
+                com_pos_local = self.obs_buf[0, 7:10].view(-1).clone()
                 com_pos_local[0] += 2
                 com_pos_local[1] += 1
                 self.renderer.add_sphere(com_pos_local.tolist(), 0.1, "com", self.render_time)
@@ -536,7 +536,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         end_effector_reward = torch.exp(-40 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
 
         # center-of-mass reward: exp(-10 * sum(com pos, ref com pos diff **2))
-        com_pos_local = self.obs_buf[:, 10:13]
+        com_pos_local = self.obs_buf[:, 7:10]
         ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
         ref_com_pos_local = tu.to_local_frame_pos(ref_com_pos.view(self.num_envs, 1, 3), ref_root_transform).view(self.num_envs, -1)
         com_pos_diff = com_pos_local - ref_com_pos_local
