@@ -512,8 +512,10 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
         # relative body X_sc for reference state
         body_X_sc = self.obs_buf[:, 18:95].view(self.num_envs, -1, 7)
+        body_v_s = self.obs_buf[:, 95:-1].view(self.num_envs, -1, 6)
         # ref_root_transform = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
         ref_body_X_sc = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)
+        ref_body_v_s = self.reference_state.body_v_s.view(self.num_envs, -1, 6)
 
         # pos reward: exp(-2 * sum(body quat, ref body quat diff **2))
         body_quat = body_X_sc[:, :, 3:7]
@@ -522,7 +524,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
 
         # velocity reward: exp(-0.1 * sum(body w, ref body w diff **2))
-        body_w_diff = self.state.body_v_s.view(self.num_envs, -1, 6)[:, :, 0:3] - self.reference_state.body_v_s.view(self.num_envs, -1, 6)[:, :, 0:3]
+        body_w_diff = body_v_s[:, :, 0:3] - ref_body_v_s[:, :, 0:3]
         vel_reward = torch.exp(-0.1 * torch.sum(torch.sum(body_w_diff ** 2, dim=-1), dim=-1))
 
         # end-effector reward: exp(-40 * sum(end-effector pos, ref end-effector pos diff **2))
@@ -565,7 +567,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         # print the mean reward
         # print(f"mean imitation reward: {torch.mean(imitation_reward).item()}, mean goal reward: {torch.mean(goal_reward).item()}")
 
-        self.rew_buf = w_g * goal_reward + w_i * imitation_reward
+        self.rew_buf = imitation_reward
 
         # reset agents (early termination)
         self.reset_buf = torch.where(self.obs_buf[:, 1] < self.termination_height, torch.ones_like(self.reset_buf),
