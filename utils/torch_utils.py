@@ -253,7 +253,7 @@ def get_center_of_mass(body_I_m, body_X_sm):
     return: the center of mass position in the local frame (num_envs, 3)
     """
     num_envs = body_I_m.shape[0]
-    mass = body_I_m[:, :, 3, 3] # (num_envs, num_links)
+    mass = body_I_m[:, :, 3, 3] # (num_envs, num_links, 3, 3)
     com_pos = torch.sum(mass.unsqueeze(-1) * body_X_sm[:, :, 0:3], dim=1) / torch.sum(mass, dim=1).unsqueeze(-1)
     return com_pos
 

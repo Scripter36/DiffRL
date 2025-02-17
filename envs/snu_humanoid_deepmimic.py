@@ -387,6 +387,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                 self.progress_buf[env_ids] = 0
                 self.offset_buf[env_ids] = 0
                 self.start_frame_offset = 0
+                self.reference_frame[env_ids] = 0
                 self.copy_ref_pos_to_state(env_ids)
                 # # start pos randomization
                 self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] = self.state.joint_q.view(self.num_envs, -1)[
@@ -404,6 +405,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                 self.progress_buf[env_ids] = 0
                 self.offset_buf[env_ids] = 0
                 self.start_frame_offset = 0
+                self.reference_frame[env_ids] = 0
                 self.copy_ref_pos_to_state(env_ids)
 
             # clear action
@@ -546,7 +548,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
         # imitation_reward = w_p * pos_reward + w_v * vel_reward + w_e * end_effector_reward + w_c * com_reward
         # instead, use multiplied reward
-        imitation_reward = pos_reward * vel_reward * end_effector_reward * com_reward
+        imitation_reward = pos_reward * com_reward
 
         # goal reward
         up_reward = 0.1 * self.obs_buf[:, 17]
@@ -585,7 +587,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         # self.reset_buf = torch.where(torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1) > 0.2, torch.ones_like(self.reset_buf),
         #                                 self.reset_buf)
         # if imitation reward is less than 0.3, reset
-        self.reset_buf = torch.where(imitation_reward < 0.3, torch.ones_like(self.reset_buf), self.reset_buf)
+        self.reset_buf = torch.where(imitation_reward < 0.1, torch.ones_like(self.reset_buf), self.reset_buf)
         
         # normal termination
         self.reset_buf = torch.where(self.progress_buf > self.episode_length - 1, torch.ones_like(self.reset_buf),
@@ -624,8 +626,8 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.reference_frame = frame_indices
 
         # update joint_q and joint_qd
-        next_state.joint_q[:] = self.reference_joint_q[frame_indices, :].view(-1)
-        next_state.joint_qd[:] = self.reference_joint_qd[frame_indices, :].view(-1)
+        next_state.joint_q.view(self.num_envs, -1)[:, :] = self.reference_joint_q[frame_indices, :]
+        next_state.joint_qd.view(self.num_envs, -1)[:, :] = self.reference_joint_qd[frame_indices, :]
         
         # apply the offset to the reference model
         next_state.joint_q.view(self.num_envs, -1)[:, :3] += self.reference_pos_offset
