@@ -549,9 +549,9 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         com_pos_diff = com_pos - ref_com_pos
         com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
 
-        # imitation_reward = w_p * pos_reward + w_v * vel_reward + w_e * end_effector_reward + w_c * com_reward
+        imitation_reward = w_p * pos_reward + w_c * com_reward
         # instead, use multiplied reward
-        imitation_reward = pos_reward * com_reward
+        # imitation_reward = pos_reward * com_reward
 
         # goal reward
         up_reward = 0.1 * self.obs_buf[:, 17]
@@ -590,7 +590,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         # self.reset_buf = torch.where(torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1) > 0.2, torch.ones_like(self.reset_buf),
         #                                 self.reset_buf)
         # if imitation reward is less than 0.3, reset
-        self.reset_buf = torch.where(imitation_reward < 0.1, torch.ones_like(self.reset_buf), self.reset_buf)
+        self.reset_buf = torch.where(imitation_reward < 0.3, torch.ones_like(self.reset_buf), self.reset_buf)
         
         # normal termination
         self.reset_buf = torch.where(self.progress_buf > self.episode_length - 1, torch.ones_like(self.reset_buf),
