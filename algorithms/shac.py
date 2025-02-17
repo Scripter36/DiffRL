@@ -642,20 +642,13 @@ class SHAC:
             all_metrics = []
             timestamp_now = round(time.time() * 1000)
             all_metrics.append(Metric(key="lr_iter", value=lr, step=self.iter_count, timestamp=timestamp_now))
-            # all_metrics.append(Metric(key="actor_loss_step", value=self.actor_loss, step=self.step_count, timestamp=timestamp_now))
             all_metrics.append(Metric(key="actor_loss_iter", value=self.actor_loss, step=self.iter_count, timestamp=timestamp_now))
-            # all_metrics.append(Metric(key="value_loss_step", value=self.value_loss, step=self.step_count, timestamp=timestamp_now))
             all_metrics.append(Metric(key="value_loss_iter", value=self.value_loss, step=self.iter_count, timestamp=timestamp_now))
             if len(self.episode_loss_his) > 0:
-                # all_metrics.append(Metric(key="policy_loss_step", value=mean_policy_loss, step=self.step_count, timestamp=timestamp_now))
                 all_metrics.append(Metric(key="policy_loss_iter", value=mean_policy_loss, step=self.iter_count, timestamp=timestamp_now))
-                # all_metrics.append(Metric(key="rewards_step", value=-mean_policy_loss, step=self.step_count, timestamp=timestamp_now))
                 all_metrics.append(Metric(key="rewards_iter", value=-mean_policy_loss, step=self.iter_count, timestamp=timestamp_now))
-                # all_metrics.append(Metric(key="policy_discounted_loss_step", value=mean_policy_discounted_loss, step=self.step_count, timestamp=timestamp_now   ))
                 all_metrics.append(Metric(key="policy_discounted_loss_iter", value=mean_policy_discounted_loss, step=self.iter_count, timestamp=timestamp_now))
-                # all_metrics.append(Metric(key="best_policy_loss_step", value=self.best_policy_loss, step=self.step_count, timestamp=timestamp_now))
                 all_metrics.append(Metric(key="best_policy_loss_iter", value=self.best_policy_loss, step=self.iter_count, timestamp=timestamp_now))
-                # all_metrics.append(Metric(key="episode_lengths_step", value=mean_episode_length, step=self.step_count, timestamp=timestamp_now))
                 all_metrics.append(Metric(key="episode_lengths_iter", value=mean_episode_length, step=self.iter_count, timestamp=timestamp_now))
 
             mlflow_manager.mlflow_client.log_batch(mlflow_manager.active_run.info.run_id, all_metrics)
