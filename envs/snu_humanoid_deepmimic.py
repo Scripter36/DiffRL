@@ -231,7 +231,6 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
                 # add the observations and reference poses
                 # relative reference pos
-                ref_root_transform = self.reference_state.joint_q.view(self.num_envs, -1)[:, 0:7]
                 ref_relative_body_X_sc = self.reference_state.body_X_sc.view(self.num_envs, -1, 7).clone().view(-1, 7)
 
                 for s in self.skeletons:
@@ -272,6 +271,12 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                 com_pos[0] += 2
                 com_pos[1] += 1
                 self.renderer.add_sphere(com_pos.tolist(), 0.1, "com", self.render_time)
+
+                # reference com pos: add sphere
+                ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7)).view(-1, 3)[0, :]
+                ref_com_pos[0] += 2
+                ref_com_pos[1] += 1
+                self.renderer.add_sphere(ref_com_pos.tolist(), 0.1, "ref_com", self.render_time)
 
             self.renderer.update(self.state, self.render_time)
 
@@ -539,7 +544,9 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         com_pos_diff = com_pos - ref_com_pos
         com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
 
-        imitation_reward = w_p * pos_reward + w_v * vel_reward + w_e * end_effector_reward + w_c * com_reward
+        # imitation_reward = w_p * pos_reward + w_v * vel_reward + w_e * end_effector_reward + w_c * com_reward
+        # instead, use multiplied reward
+        imitation_reward = pos_reward * vel_reward * end_effector_reward * com_reward
 
         # goal reward
         up_reward = 0.1 * self.obs_buf[:, 17]
