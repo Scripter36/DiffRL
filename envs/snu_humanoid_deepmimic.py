@@ -53,8 +53,6 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.num_dof = self.num_joint_q - 7 # 22
         self.num_muscles = 152
 
-        self.str_scale = 0.6
-
         num_act = self.num_muscles
         num_obs = 162
 
@@ -177,8 +175,9 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.reference_frame = torch.zeros((self.num_envs), dtype=torch.long, device=self.device)
 
         # move ref pos to the initial pos
-        self.start_pos = torch.tensor((0.0, 0.93, 0.0), dtype=torch.float32, device=self.device)
+        self.start_pos = torch.tensor((0.0, 0.94, 0.0), dtype=torch.float32, device=self.device)
         self.reference_pos_offset = self.start_pos.unsqueeze(0).repeat(self.num_envs, 1) - self.reference_joint_q[0, 0:3]
+        self.reference_pos_offset[:, 1] += 0.01
         self.start_reference_pos_offset = self.reference_pos_offset.clone()
 
         if (self.model.ground):
@@ -380,7 +379,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
             # randomization
             if self.stochastic_init:
                 self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = 0
+                self.offset_buf[env_ids] = -15
                 self.start_frame_offset = 0
                 self.reference_frame[env_ids] = 0
                 self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
@@ -399,7 +398,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                             torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
             else:
                 self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = 0
+                self.offset_buf[env_ids] = -15
                 self.start_frame_offset = 0
                 self.reference_frame[env_ids] = 0
                 self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
@@ -535,7 +534,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         end_effector_pos = body_X_sc[:, self.end_effector_indices, 0:3]
         ref_end_effector_pos = ref_body_X_sc[:, self.end_effector_indices, 0:3]
         end_effector_pos_diff = end_effector_pos - ref_end_effector_pos
-        end_effector_reward = torch.exp(-4 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
+        end_effector_reward = torch.exp(-10 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
 
         # center-of-mass reward: exp(-10 * sum(com pos, ref com pos diff **2))
         com_pos = self.obs_buf[:, 7:10]
