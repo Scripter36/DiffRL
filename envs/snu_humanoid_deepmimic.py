@@ -91,8 +91,8 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.builder = df.ModelBuilder()
         self.reference_builder = df.ModelBuilder()
 
-        self.dt = 1.0 / 120.0
-        self.sim_substeps = 24
+        self.dt = 1.0 / 60.0
+        self.sim_substeps = 48
 
         self.sim_dt = self.dt
 
@@ -386,7 +386,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
             # randomization
             if self.stochastic_init:
                 self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = -30
+                self.offset_buf[env_ids] = -15
                 self.start_frame_offset = 0
                 self.reference_frame[env_ids] = 0
                 self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
@@ -405,7 +405,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                             torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
             else:
                 self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = -30
+                self.offset_buf[env_ids] = -15
                 self.start_frame_offset = 0
                 self.reference_frame[env_ids] = 0
                 self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
