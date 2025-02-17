@@ -177,7 +177,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.reference_frame = torch.zeros((self.num_envs), dtype=torch.long, device=self.device)
 
         # move ref pos to the initial pos
-        self.start_pos = torch.tensor((0.0, 0.95, 0.0), dtype=torch.float32, device=self.device)
+        self.start_pos = torch.tensor((0.0, 0.93, 0.0), dtype=torch.float32, device=self.device)
         self.reference_pos_offset = self.start_pos.unsqueeze(0).repeat(self.num_envs, 1) - self.reference_joint_q[0, 0:3]
         self.start_reference_pos_offset = self.reference_pos_offset.clone()
 
@@ -240,7 +240,6 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                         if link != -1:
                             link_transform = ref_relative_body_X_sc[link]
                             link_transform[0] += 2
-                            link_transform[1] += 1
                             X_sc = df.transform_expand(link_transform.tolist())
 
                             mesh_path = os.path.join(render_asset_folder, "OBJ/" + mesh + ".usd")
@@ -254,10 +253,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                         if link != -1:
                             link_transform = relative_body_X_sc[link]
                             link_transform[0] += 2
-                            link_transform[1] += 1
                             X_sc = df.transform_expand(link_transform.tolist())
-
-
 
                             mesh_path = os.path.join(render_asset_folder, "OBJ/" + mesh + ".usd")
 
@@ -270,13 +266,11 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                 # com_pos: add sphere
                 com_pos = self.obs_buf[0, 7:10].view(-1).clone()
                 com_pos[0] += 2
-                com_pos[1] += 1
                 self.renderer.add_sphere(com_pos.tolist(), 0.1, "com", self.render_time)
 
                 # reference com pos: add sphere
                 ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7)).view(-1, 3)[0, :]
                 ref_com_pos[0] += 2
-                ref_com_pos[1] += 1
                 self.renderer.add_sphere(ref_com_pos.tolist(), 0.1, "ref_com", self.render_time)
 
             self.renderer.update(self.state, self.render_time)
@@ -386,7 +380,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
             # randomization
             if self.stochastic_init:
                 self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = -15
+                self.offset_buf[env_ids] = 0
                 self.start_frame_offset = 0
                 self.reference_frame[env_ids] = 0
                 self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
@@ -405,7 +399,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                             torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
             else:
                 self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = -15
+                self.offset_buf[env_ids] = 0
                 self.start_frame_offset = 0
                 self.reference_frame[env_ids] = 0
                 self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
@@ -541,7 +535,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         end_effector_pos = body_X_sc[:, self.end_effector_indices, 0:3]
         ref_end_effector_pos = ref_body_X_sc[:, self.end_effector_indices, 0:3]
         end_effector_pos_diff = end_effector_pos - ref_end_effector_pos
-        end_effector_reward = torch.exp(-40 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
+        end_effector_reward = torch.exp(-4 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
 
         # center-of-mass reward: exp(-10 * sum(com pos, ref com pos diff **2))
         com_pos = self.obs_buf[:, 7:10]
@@ -551,7 +545,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
         # imitation_reward = w_p * pos_reward + w_v * vel_reward + w_e * end_effector_reward + w_c * com_reward
         # instead, use multiplied reward
-        imitation_reward = pos_reward * com_reward
+        imitation_reward = pos_reward * com_reward * end_effector_reward
 
         # goal reward
         up_reward = 0.1 * self.obs_buf[:, 17]
