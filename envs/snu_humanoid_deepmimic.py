@@ -179,6 +179,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         # move ref pos to the initial pos
         self.start_pos = torch.tensor((0.0, 0.95, 0.0), dtype=torch.float32, device=self.device)
         self.reference_pos_offset = self.start_pos.unsqueeze(0).repeat(self.num_envs, 1) - self.reference_joint_q[0, 0:3]
+        self.start_reference_pos_offset = self.reference_pos_offset.clone()
 
         if (self.model.ground):
             self.model.collide(self.state)
@@ -388,6 +389,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                 self.offset_buf[env_ids] = 0
                 self.start_frame_offset = 0
                 self.reference_frame[env_ids] = 0
+                self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
                 self.copy_ref_pos_to_state(env_ids)
                 # # start pos randomization
                 self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] = self.state.joint_q.view(self.num_envs, -1)[
@@ -406,6 +408,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                 self.offset_buf[env_ids] = 0
                 self.start_frame_offset = 0
                 self.reference_frame[env_ids] = 0
+                self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
                 self.copy_ref_pos_to_state(env_ids)
 
             # clear action
