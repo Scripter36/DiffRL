@@ -1,8 +1,14 @@
 import os
 import mlflow
+import queue
+import threading
+import json
 
 from dotenv import load_dotenv
 load_dotenv(override=True)  # This loads variables from .env into os.environ
+
+import logging
+logging.getLogger("mlflow").setLevel(logging.ERROR)
 
 # Set the MLFlow tracking URI if the environment variable is provided.
 tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
@@ -12,32 +18,52 @@ if tracking_uri:
 
 mlflow.config.enable_async_logging()
 
-# Singleton class to manage MLflow client and active run
-class MLFlowManager:
-    _instance = None
-    _mlflow_client = None 
-    _active_run = None
+# thread queue
+_save_queue = queue.Queue()
+_save_worker_thread = None
 
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(MLFlowManager, cls).__new__(cls)
-        return cls._instance
+def _mlflow_save_worker():
+    while True:
+        task = _save_queue.get()
+        if task is None:
+            break
+        checkpoint_model, filename = task
+        active_run = mlflow.active_run()
+        # https://github.com/mlflow/mlflow/issues/10802
+        # remove the existing model history, to prevent overflow (8000 char limit)
+        run = mlflow.get_run(active_run.info.run_id)
+        if 'mlflow.log-model.history' in run.data.tags:
+            history = json.loads(run.data.tags['mlflow.log-model.history'])
+            # delete the existing one
+            history = [item for item in history if item['artifact_path'] != filename]
+            mlflow.set_tag('mlflow.log-model.history', json.dumps(history))
+        # save the model
+        mlflow.pytorch.log_model(checkpoint_model, filename, run_id=active_run.info.run_id)
+        _save_queue.task_done()
 
-    @property
-    def mlflow_client(self) -> mlflow.MlflowClient:
-        if self._mlflow_client is None:
-            self._mlflow_client = mlflow.MlflowClient()
-        return self._mlflow_client
+def start_save_worker():
+    global _save_worker_thread
+    if _save_worker_thread is None or not _save_worker_thread.is_alive():
+        _save_worker_thread = threading.Thread(target=_mlflow_save_worker, daemon=True)
+        _save_worker_thread.start()
 
-    @property
-    def active_run(self) -> mlflow.ActiveRun:
-        return self._active_run
+def enqueue_model_save(checkpoint_model, filename):
+    # Ensure the save worker thread is running.
+    start_save_worker()
+    _save_queue.put((checkpoint_model, filename))
 
-    @active_run.setter 
-    def active_run(self, run: mlflow.ActiveRun):
-        self._active_run = run
+def stop_save_worker():
+    # Optionally, stop the worker thread gracefully.
+    _save_queue.put(None)
+    if _save_worker_thread is not None:
+        _save_worker_thread.join()
 
-mlflow_manager = MLFlowManager()
+_mlflow_client = None
+def get_mlflow_client():
+    global _mlflow_client
+    if _mlflow_client is None:
+        _mlflow_client = mlflow.MlflowClient()
+    return _mlflow_client
 
 def flatten_dict(d, parent_key='', sep='.'):
     """

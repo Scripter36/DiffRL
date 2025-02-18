@@ -109,11 +109,10 @@ def main():
                         break
                     else:
                         raise Exception(f"Training failed with {num_tries} tries.")
+                except KeyboardInterrupt:
+                    print(f"{YELLOW}Training interrupted by user.{RESET}")
+                    sys.exit(0)
                 except Exception as e:
-                    # if interrupted by user, exit
-                    if isinstance(e, KeyboardInterrupt):
-                        print(f"{YELLOW}Training interrupted by user.{RESET}")
-                        sys.exit(0)
                     print(f"{YELLOW}Error: {e}{RESET}")  # Yellow text for errors
                     print(f"{YELLOW}Restarting training... ({num_tries} tries){RESET}")  # Yellow text for errors
                     num_tries += 1
