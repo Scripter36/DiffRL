@@ -333,6 +333,9 @@ class Model:
         self.edge_kd = 0.0
 
         self.particle_radius = 0.1
+
+        # introduced in warp, to smooth the friction around vertical velocity
+        self.friction_smoothing = 1.0
         self.adapter = adapter
 
     def state(self) -> State:

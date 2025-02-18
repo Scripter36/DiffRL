@@ -175,9 +175,9 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.reference_frame = torch.zeros((self.num_envs), dtype=torch.long, device=self.device)
 
         # move ref pos to the initial pos
-        self.start_pos = torch.tensor((0.0, 0.90, 0.0), dtype=torch.float32, device=self.device)
+        self.start_pos = torch.tensor((0.0, 0.93, 0.0), dtype=torch.float32, device=self.device)
         self.reference_pos_offset = self.start_pos.unsqueeze(0).repeat(self.num_envs, 1) - self.reference_joint_q[0, 0:3]
-        self.reference_pos_offset[:, 1] += 0.05
+        self.reference_pos_offset[:, 1] += 0.02
         self.start_reference_pos_offset = self.reference_pos_offset.clone()
 
         if (self.model.ground):
@@ -540,7 +540,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         com_pos = self.obs_buf[:, 7:10]
         ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
         com_pos_diff = com_pos - ref_com_pos
-        com_reward = torch.exp(-20 * torch.sum(com_pos_diff ** 2, dim=-1))
+        com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
 
         # imitation_reward = w_p * pos_reward + w_v * vel_reward + w_e * end_effector_reward + w_c * com_reward
         # instead, use multiplied reward

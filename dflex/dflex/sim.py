@@ -1134,6 +1134,17 @@ def spatial_transform_inertia(t: df.spatial_transform, I: df.spatial_matrix):
     return mul(mul(transpose(T), I), T)
 
 
+@df.func
+def norm_huber(x: df.float3, delta: float):
+    a = df.dot(x, x)
+    if a <= delta * delta:
+        return 0.5 * a
+    return delta * (df.sqrt(a) - 0.5 * delta)
+
+@df.func
+def norm_pseudo_huber(x: df.float3, delta: float):
+    return delta * df.sqrt(1.0 + df.dot(x, x) / (delta * delta))
+
 @df.kernel
 def eval_rigid_contacts_art(
     body_X_s: df.tensor(df.spatial_transform),
@@ -1143,6 +1154,7 @@ def eval_rigid_contacts_art(
     contact_dist: df.tensor(float),
     contact_mat: df.tensor(int),
     materials: df.tensor(float),
+    friction_smoothing: float,
     body_f_s: df.tensor(df.spatial_vector)):
 
     tid = df.tid()
@@ -1198,7 +1210,13 @@ def eval_rigid_contacts_art(
     # vz = df.clamp(dot(float3(0.0, 0.0, kf), vt), lower, upper)
 
     # Coulomb friction (smooth, but gradients are numerically unstable around |vt| = 0)
-    ft = df.normalize(vt)*df.min(kf*df.length(vt), 0.0 - mu*c*ke) * df.step(c)
+    # ft = df.normalize(vt)*df.min(kf*df.length(vt), 0.0 - mu*c*ke) * df.step(c)
+    ft = df.float3(0.0, 0.0, 0.0)
+    if c < 0.0:
+        vs = norm_pseudo_huber(vt, friction_smoothing)
+        if vs > 0.0:
+            fr = vt / vs
+            ft = fr * df.min(kf * vs, mu * (fn + fd) * (0.0 - 1.0))
 
     f_total = n * (fn + fd) + ft
     t_total = df.cross(p, f_total)
@@ -2523,7 +2541,8 @@ class SemiImplicitIntegrator:
                             model.contact_point0,
                             model.contact_dist,
                             model.contact_material,
-                            model.shape_materials
+                            model.shape_materials,
+                            model.friction_smoothing
                         ],
                         outputs=[
                             state_out.body_f_s
