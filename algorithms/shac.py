@@ -5,8 +5,6 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-import json
-from multiprocessing.sharedctypes import Value
 import sys, os
 
 from torch.nn.utils.clip_grad import clip_grad_norm_
@@ -23,7 +21,7 @@ from tensorboardX import SummaryWriter
 import yaml
 import mlflow
 from mlflow.entities import Metric
-from utils.mlflow_utils import mlflow_manager
+from utils.mlflow_utils import enqueue_model_save, get_mlflow_client, stop_save_worker
 import dflex as df
 
 import envs
@@ -37,7 +35,6 @@ from utils.time_report import TimeReport
 from utils.average_meter import AverageMeter
 
 import torch.nn as nn
-import threading
 
 class SHACCheckpoint(nn.Module):
     def __init__(self, actor, critic, target_critic, obs_rms, ret_rms):
@@ -47,8 +44,19 @@ class SHACCheckpoint(nn.Module):
         self.target_critic = target_critic
         self.obs_rms = obs_rms
         self.ret_rms = ret_rms
+
     def forward(self, x):
         raise NotImplementedError("This checkpoint model is for storage only and not for inference")
+    
+    def cpu(self):
+        # Clone models and move to CPU
+        actor_cpu = copy.deepcopy(self.actor).to('cpu')
+        critic_cpu = copy.deepcopy(self.critic).to('cpu')
+        target_critic_cpu = copy.deepcopy(self.target_critic).to('cpu')
+        # already copied, do not need to copy again
+        obs_rms_cpu = self.obs_rms.to('cpu') if self.obs_rms is not None else None
+        ret_rms_cpu = self.ret_rms.to('cpu') if self.ret_rms is not None else None
+        return SHACCheckpoint(actor_cpu, critic_cpu, target_critic_cpu, obs_rms_cpu, ret_rms_cpu)
 
 class SHAC:
     def __init__(self, cfg, checkpoint=None, render_name=None):
@@ -58,7 +66,7 @@ class SHAC:
             seeding(seed)
         if render_name is None:
             # use experiment name
-            render_name = mlflow.get_experiment(mlflow_manager.active_run.info.experiment_id).name
+            render_name = mlflow.get_experiment(mlflow.active_run().info.experiment_id).name
         env_fn = getattr(envs, cfg["params"]["diff_env"]["name"])
         self.env = env_fn(num_envs = cfg["params"]["config"]["num_actors"], \
                             device = cfg["params"]["general"]["device"], \
@@ -650,12 +658,13 @@ class SHAC:
                 all_metrics.append(Metric(key="policy_discounted_loss_iter", value=mean_policy_discounted_loss, step=self.iter_count, timestamp=timestamp_now))
                 all_metrics.append(Metric(key="best_policy_loss_iter", value=self.best_policy_loss, step=self.iter_count, timestamp=timestamp_now))
                 all_metrics.append(Metric(key="episode_lengths_iter", value=mean_episode_length, step=self.iter_count, timestamp=timestamp_now))
+                all_metrics.append(Metric(key="grad_norm_before_clip_iter", value=self.grad_norm_before_clip, step=self.iter_count, timestamp=timestamp_now))
 
-            mlflow_manager.mlflow_client.log_batch(mlflow_manager.active_run.info.run_id, all_metrics)
+            get_mlflow_client().log_batch(mlflow.active_run().info.run_id, all_metrics)
             # ---- End MLFlow logging ----
 
             if self.save_interval > 0 and (self.iter_count % self.save_interval == 0):
-                self.save(self.name + "policy_iter{}_reward{:.3f}".format(self.iter_count, -mean_policy_loss))
+                self.save(f"iter{self.iter_count}_reward{-mean_policy_loss:.3f}")
 
             # update target critic
             with torch.no_grad():
@@ -690,33 +699,7 @@ class SHAC:
     def save(self, filename = None):
         if filename is None:
             filename = 'best_policy'
-        # Define a wrapper module to bundle multiple components for saving.
-
-        # Clone models and move to CPU
-        actor_cpu = copy.deepcopy(self.actor).to('cpu')
-        critic_cpu = copy.deepcopy(self.critic).to('cpu')
-        target_critic_cpu = copy.deepcopy(self.target_critic).to('cpu')
-        # already copied, do not need to copy again
-        obs_rms_cpu = self.obs_rms.to('cpu') if self.obs_rms is not None else None
-        ret_rms_cpu = self.ret_rms.to('cpu') if self.ret_rms is not None else None
-        
-        checkpoint_model = SHACCheckpoint(actor_cpu, critic_cpu, target_critic_cpu, obs_rms_cpu, ret_rms_cpu)
-
-        def save_checkpoint():
-            # https://github.com/mlflow/mlflow/issues/10802
-            # to ensure only one log per filename, parse the tag and delete the existing one
-            run = mlflow.get_run(mlflow_manager.active_run.info.run_id)
-            if 'mlflow.log-model.history' in run.data.tags:
-                history = json.loads(run.data.tags['mlflow.log-model.history'])
-                # delete the existing one
-                history = [item for item in history if item['artifact_path'] != filename]
-                # save the new history
-                mlflow.set_tag('mlflow.log-model.history', json.dumps(history))
-            mlflow.pytorch.log_model(checkpoint_model, filename, run_id=mlflow_manager.active_run.info.run_id)
-
-        # Run save in separate thread
-        save_thread = threading.Thread(target=save_checkpoint)
-        save_thread.start()
+        enqueue_model_save(SHACCheckpoint(self.actor, self.critic, self.target_critic, self.obs_rms, self.ret_rms).cpu(), filename)
 
     def load(self, path):
         print("Loading checkpoint from", path)
@@ -729,4 +712,4 @@ class SHAC:
 
     def close(self):
         self.writer.close()
-    
+        stop_save_worker()

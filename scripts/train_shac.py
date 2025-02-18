@@ -22,7 +22,7 @@ import sys
 import yaml
 import torch
 import mlflow
-from utils.mlflow_utils import flatten_dict, mlflow_manager, set_experiment_name_from_env, unflatten_dict
+from utils.mlflow_utils import flatten_dict, set_experiment_name_from_env, unflatten_dict
 
 import numpy as np
 import copy
@@ -137,15 +137,19 @@ if __name__ == '__main__':
         set_experiment_name_from_env(cfg_train["params"]["config"].get("name", "default_experiment"))
 
         mlflow.end_run()
-        with mlflow.start_run() as run:
-            mlflow_manager.active_run = run
+        with mlflow.start_run():
             mlflow.log_params(flatten_dict(cfg_train))
             # also store original cfg_train for reproducibility
             mlflow.log_dict(cfg_train, "cfg_train.json")
             traj_optimizer = shac.SHAC(cfg_train)
             if checkpoint_path is not None:
                 traj_optimizer.load(checkpoint_path)
-            traj_optimizer.train()
+            try:
+                traj_optimizer.train()
+            except KeyboardInterrupt:
+                print("Training interrupted by user. Saving final model...")
+                traj_optimizer.save('final_policy')
+                traj_optimizer.close()
     else:
         traj_optimizer = shac.SHAC(cfg_train, render_name=experiment_name)
         if checkpoint_path is not None:
