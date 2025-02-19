@@ -54,7 +54,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.num_muscles = 152
 
         num_act = self.num_muscles
-        num_obs = 162
+        num_obs = 305
 
         super(SNUHumanoidDeepMimicEnv, self).__init__(num_envs, num_obs, num_act, episode_length, MM_caching_frequency, seed,
                                                  no_grad, render, render_name, device)
@@ -504,8 +504,11 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
             up_vec[:, 1:2],  # 16:17
             (heading_vec * target_dirs).sum(dim=-1).unsqueeze(-1), # 17:18
             body_X_sc.view(self.num_envs, -1), # 18:95
-            self.joint_vel_obs_scaling * self.state.body_v_s.view(self.num_envs, -1), # 95:-1
-            phase.view(self.num_envs, 1), # -1
+            self.joint_vel_obs_scaling * self.state.body_v_s.view(self.num_envs, -1), # 95:161
+            # add reference motion
+            self.reference_state.body_X_sc.view(self.num_envs, -1), # 161:238
+            self.joint_vel_obs_scaling * self.reference_state.body_v_s.view(self.num_envs, -1), # 238:304
+            phase.view(self.num_envs, 1), # 304
         ], dim=-1)
 
     def calculateReward(self):
@@ -517,10 +520,10 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
         # relative body X_sc for reference state
         body_X_sc = self.obs_buf[:, 18:95].view(self.num_envs, -1, 7)
-        body_v_s = self.obs_buf[:, 95:-1].view(self.num_envs, -1, 6)
+        body_v_s = self.obs_buf[:, 95:161].view(self.num_envs, -1, 6)
         # ref_root_transform = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
-        ref_body_X_sc = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)
-        ref_body_v_s = self.reference_state.body_v_s.view(self.num_envs, -1, 6)
+        ref_body_X_sc = self.obs_buf[:, 161:238].view(self.num_envs, -1, 7)
+        ref_body_v_s = self.obs_buf[:, 238:304].view(self.num_envs, -1, 6)
 
         # pos reward: exp(-2 * sum(body quat, ref body quat diff **2))
         body_quat = body_X_sc[:, :, 3:7]
