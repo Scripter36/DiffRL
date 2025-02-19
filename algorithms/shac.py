@@ -59,7 +59,7 @@ class SHACCheckpoint(nn.Module):
         return SHACCheckpoint(actor_cpu, critic_cpu, target_critic_cpu, obs_rms_cpu, ret_rms_cpu)
 
 class SHAC:
-    def __init__(self, cfg, checkpoint=None, render_name=None):
+    def __init__(self, cfg, render_name=None):
         self.cfg = cfg
         seed = cfg["params"]["general"]["seed"]
         if seed is not None:
@@ -104,17 +104,10 @@ class SHAC:
 
         self.obs_rms = None
         if cfg['params']['config'].get('obs_rms', False):
-            if checkpoint is not None:
-                self.obs_rms = checkpoint.obs_rms
-            else:
-                self.obs_rms = RunningMeanStd(shape = (self.num_obs), device = self.device)
-            
+            self.obs_rms = RunningMeanStd(shape = (self.num_obs), device = self.device)
         self.ret_rms = None
         if cfg['params']['config'].get('ret_rms', False):
-            if checkpoint is not None:
-                self.ret_rms = checkpoint.ret_rms
-            else:
-                self.ret_rms = RunningMeanStd(shape = (), device = self.device)
+            self.ret_rms = RunningMeanStd(shape = (), device = self.device)
 
         self.rew_scale = cfg['params']['config'].get('rew_scale', 1.0)
 
@@ -151,21 +144,16 @@ class SHAC:
             self.steps_num = self.env.episode_length
 
         # create actor critic network
-        if checkpoint is not None:
-            self.actor = checkpoint.actor
-            self.critic = checkpoint.critic
-            self.target_critic = checkpoint.target_critic
-        else:
-            self.actor_name = cfg["params"]["network"].get("actor", 'ActorStochasticMLP') # choices: ['ActorDeterministicMLP', 'ActorStochasticMLP']
-            self.critic_name = cfg["params"]["network"].get("critic", 'CriticMLP')
-            actor_fn = getattr(models.actor, self.actor_name)
-            self.actor = actor_fn(self.num_obs, self.num_actions, cfg['params']['network'], device = self.device)
-            critic_fn = getattr(models.critic, self.critic_name)
-            self.critic = critic_fn(self.num_obs, cfg['params']['network'], device = self.device)
-            self.target_critic = copy.deepcopy(self.critic)
+        self.actor_name = cfg["params"]["network"].get("actor", 'ActorStochasticMLP') # choices: ['ActorDeterministicMLP', 'ActorStochasticMLP']
+        self.critic_name = cfg["params"]["network"].get("critic", 'CriticMLP')
+        actor_fn = getattr(models.actor, self.actor_name)
+        self.actor = actor_fn(self.num_obs, self.num_actions, cfg['params']['network'], device = self.device)
+        critic_fn = getattr(models.critic, self.critic_name)
+        self.critic = critic_fn(self.num_obs, cfg['params']['network'], device = self.device)
+        self.target_critic = copy.deepcopy(self.critic)
         self.all_params = list(self.actor.parameters()) + list(self.critic.parameters())
     
-        if cfg['params']['general']['train'] and checkpoint is None:
+        if cfg['params']['general']['train']:
             self.save('init_policy')
     
         # initialize optimizer

@@ -22,7 +22,7 @@ params:
     critic_learning_rate: 5e-4 # adam
     lr_schedule: linear # ['constant', 'linear']
     target_critic_alpha: 0.995
-    obs_rms: True
+    obs_rms: False
     ret_rms: False
     critic_iterations: 16
     critic_method: td-lambda
