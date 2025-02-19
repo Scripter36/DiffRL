@@ -156,6 +156,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.model = self.builder.finalize(self.device)
         self.model.ground = self.ground
         self.model.gravity = torch.tensor((0.0, -9.81, 0.0), dtype=torch.float32, device=self.device)
+        self.model.friction_smoothing = 0.25
 
         # load reference motion
         self.reference_frame_time, self.reference_frame_count, self.reference_joint_q, self.reference_joint_q_mask, self.reference_joint_qd = \
@@ -175,9 +176,10 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.reference_frame = torch.zeros((self.num_envs), dtype=torch.long, device=self.device)
 
         # move ref pos to the initial pos
-        self.start_pos = torch.tensor((0.0, 0.93, 0.0), dtype=torch.float32, device=self.device)
+        start_height = self.reference_joint_q[0, 1] - 0.1
+        self.start_pos = torch.tensor((0.0, start_height, 0.0), dtype=torch.float32, device=self.device)
         self.reference_pos_offset = self.start_pos.unsqueeze(0).repeat(self.num_envs, 1) - self.reference_joint_q[0, 0:3]
-        self.reference_pos_offset[:, 1] += 0.02
+        # self.reference_pos_offset[:, 1] += 0.02
         self.start_reference_pos_offset = self.reference_pos_offset.clone()
 
         if (self.model.ground):

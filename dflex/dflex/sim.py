@@ -1197,7 +1197,7 @@ def eval_rigid_contacts_art(
     fn = c * ke              # normal force (restitution coefficient * how far inside for ground)
 
     # contact damping
-    fd = df.min(vn, 0.0) * kd * df.step(c) * (0.0 - c)
+    fd = df.min(vn, 0.0) * kd * df.step(c)
 
     # viscous friction
     #ft = vt*kf
@@ -1216,7 +1216,7 @@ def eval_rigid_contacts_art(
         vs = norm_pseudo_huber(vt, friction_smoothing)
         if vs > 0.0:
             fr = vt / vs
-            ft = fr * df.min(kf * vs, mu * (fn + fd) * (0.0 - 1.0))
+            ft = fr * df.min(kf * vs, (0.0 - mu) * (fn + fd))
 
     f_total = n * (fn + fd) + ft
     t_total = df.cross(p, f_total)
