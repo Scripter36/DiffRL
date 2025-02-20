@@ -54,7 +54,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.num_muscles = 152
 
         num_act = self.num_muscles
-        num_obs = 163
+        num_obs = 165
 
         super(SNUHumanoidDeepMimicEnv, self).__init__(num_envs, num_obs, num_act, episode_length, MM_caching_frequency, seed,
                                                  no_grad, render, render_name, device)
@@ -490,10 +490,9 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
         up_vec = tu.quat_rotate(root_rot, self.basis_vec1)
         heading_vec = tu.quat_rotate(root_rot, self.basis_vec0)
-        # print(f'upness: {up_vec[:, 1:2]}, headingness: {(heading_vec * target_dirs).sum(dim=-1).unsqueeze(-1)}')
 
         # add distance to reference com pos
-        ref_com_pos = tu.get_center_of_mass(self.reference_model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
+        ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
         com_pos_diff = com_pos - ref_com_pos
 
         # TODO: check if we can add phase (which is not differentiable) in observations
@@ -503,10 +502,12 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
             com_pos.view(self.num_envs, -1), # 7:10
             lin_vel.view(self.num_envs, -1), # 10:13
             ang_vel.view(self.num_envs, -1), # 13:16
-            com_pos_diff.view(self.num_envs, -1), # 16:19
-            body_X_sc.view(self.num_envs, -1), # 19:96
-            self.joint_vel_obs_scaling * self.state.body_v_s.view(self.num_envs, -1), # 96:162
-            phase.view(self.num_envs, 1), # 162
+            up_vec[:, 1:2],  # 16:17
+            (heading_vec * target_dirs).sum(dim=-1).unsqueeze(-1), # 17:18
+            com_pos_diff.view(self.num_envs, -1), # 18:21
+            body_X_sc.view(self.num_envs, -1), # 21:98
+            self.joint_vel_obs_scaling * self.state.body_v_s.view(self.num_envs, -1), # 98:164
+            phase.view(self.num_envs, 1), # 164
         ], dim=-1)
 
     def calculateReward(self):
@@ -517,8 +518,8 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         w_c = 0.1
 
         # relative body X_sc for reference state
-        body_X_sc = self.obs_buf[:, 19:96].view(self.num_envs, -1, 7)
-        body_v_s = self.obs_buf[:, 96:162].view(self.num_envs, -1, 6)
+        body_X_sc = self.obs_buf[:, 21:98].view(self.num_envs, -1, 7)
+        body_v_s = self.obs_buf[:, 98:164].view(self.num_envs, -1, 6)
         # ref_root_transform = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
         ref_body_X_sc = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)
         ref_body_v_s = self.reference_state.body_v_s.view(self.num_envs, -1, 6)
@@ -527,7 +528,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         body_quat = body_X_sc[:, :, 3:7]
         ref_body_quat = ref_body_X_sc[:, :, 3:7]
         body_quat_diff = tu.quat_diff(body_quat, ref_body_quat)
-        pos_reward = torch.exp(-4 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
+        pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
 
         # velocity reward: exp(-0.1 * sum(body w, ref body w diff **2))
         body_w_diff = body_v_s[:, :, 0:3] - ref_body_v_s[:, :, 0:3]
@@ -538,7 +539,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         end_effector_pos = body_X_sc[:, self.end_effector_indices, 0:3] - body_X_sc[:, 0, 0:3].unsqueeze(1).repeat(1, len(self.end_effector_indices), 1)
         ref_end_effector_pos = ref_body_X_sc[:, self.end_effector_indices, 0:3] - ref_body_X_sc[:, 0, 0:3].unsqueeze(1).repeat(1, len(self.end_effector_indices), 1)
         end_effector_pos_diff = end_effector_pos - ref_end_effector_pos
-        end_effector_reward = torch.exp(-10 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
+        end_effector_reward = torch.exp(-5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
 
         # center-of-mass reward: exp(-10 * sum(com pos, ref com pos diff **2))
         com_pos = self.obs_buf[:, 7:10]
@@ -554,24 +555,24 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         # up_reward = 0.1 * self.obs_buf[:, 17]
         # heading_reward = 1 * self.obs_buf[:, 18]
 
-        height_diff = self.obs_buf[:, 1] - self.termination_height
-        height_reward = torch.clip(height_diff, -1.0, self.termination_tolerance)
-        height_reward = torch.where(height_reward < 0.0, -200.0 * height_reward * height_reward,
-                                    height_reward)  # JIE: not smooth
-        height_reward = torch.where(height_reward > 0.0, self.height_rew_scale * height_reward, height_reward)
+        # height_diff = self.obs_buf[:, 1] - self.termination_height
+        # height_reward = torch.clip(height_diff, -1.0, self.termination_tolerance)
+        # height_reward = torch.where(height_reward < 0.0, -200.0 * height_reward * height_reward,
+        #                             height_reward)  # JIE: not smooth
+        # height_reward = torch.where(height_reward > 0.0, self.height_rew_scale * height_reward, height_reward)
 
-        act_penalty = torch.sum(torch.abs(self.actions),
-                                dim=-1) * self.action_penalty  # torch.sum(self.actions ** 2, dim = -1) * self.action_penalty
+        # act_penalty = torch.sum(torch.abs(self.actions),
+        #                         dim=-1) * self.action_penalty  # torch.sum(self.actions ** 2, dim = -1) * self.action_penalty
 
-        # get z-axis velocity
-        progress_reward = self.obs_buf[:, 12]
-        # walking: speed is limited to 0.75m/s, so clip the reward
-        progress_reward = torch.where(progress_reward > 0.75, 0.75, progress_reward)
+        # # get z-axis velocity
+        # progress_reward = self.obs_buf[:, 12]
+        # # walking: speed is limited to 0.75m/s, so clip the reward
+        # progress_reward = torch.where(progress_reward > 0.75, 0.75, progress_reward)
 
-        goal_reward = height_reward + progress_reward
+        # goal_reward = height_reward + progress_reward
 
-        w_g = 0.05
-        w_i = 0.95
+        # w_g = 0.05
+        # w_i = 0.95
 
         # print the mean reward
         # print(f"mean imitation reward: {torch.mean(imitation_reward).item()}, mean goal reward: {torch.mean(goal_reward).item()}")
