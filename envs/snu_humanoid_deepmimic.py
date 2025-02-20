@@ -176,10 +176,10 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.reference_frame = torch.zeros((self.num_envs), dtype=torch.long, device=self.device)
 
         # move ref pos to the initial pos
-        start_height = self.reference_joint_q[0, 1] - 0.1
+        start_height = self.reference_joint_q[0, 1] - 0.12
         self.start_pos = torch.tensor((0.0, start_height, 0.0), dtype=torch.float32, device=self.device)
         self.reference_pos_offset = self.start_pos.unsqueeze(0).repeat(self.num_envs, 1) - self.reference_joint_q[0, 0:3]
-        # self.reference_pos_offset[:, 1] += 0.02
+        self.reference_pos_offset[:, 1] += 0.02
         self.start_reference_pos_offset = self.reference_pos_offset.clone()
 
         if (self.model.ground):
@@ -536,8 +536,8 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
         # end-effector reward: exp(-40 * sum(end-effector pos, ref end-effector pos diff **2))
         # let's compare end-effector pos in local frame
-        end_effector_pos = body_X_sc[:, self.end_effector_indices, 0:3] - body_X_sc[:, 0, 0:3].unsqueeze(1).repeat(1, len(self.end_effector_indices), 1)
-        ref_end_effector_pos = ref_body_X_sc[:, self.end_effector_indices, 0:3] - ref_body_X_sc[:, 0, 0:3].unsqueeze(1).repeat(1, len(self.end_effector_indices), 1)
+        end_effector_pos = body_X_sc[:, self.end_effector_indices, 0:3]
+        ref_end_effector_pos = ref_body_X_sc[:, self.end_effector_indices, 0:3]
         end_effector_pos_diff = end_effector_pos - ref_end_effector_pos
         end_effector_reward = torch.exp(-5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
 
