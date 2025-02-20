@@ -185,9 +185,6 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         if (self.model.ground):
             self.model.collide(self.state)
 
-        # copy the reference motion to the state
-        self.copy_ref_pos_to_state()
-
     def render(self, mode='human'):
         render_asset_folder = self.asset_folder
         if self.visualize:
@@ -371,31 +368,31 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
     def reset(self, env_ids=None, force_reset=True):
         if env_ids is None:
-            if force_reset == True:
-                env_ids = torch.arange(self.num_envs, dtype=torch.long, device=self.device)
+            env_ids = torch.arange(self.num_envs, dtype=torch.long, device=self.device)
 
         if env_ids is not None:
             # copy the reference motion to the state
-            # randomize the reset start frame to learn all reference frames uniformly
-
             # randomization
             if self.stochastic_init:
+                # TODO: randomize the reset start frame to learn all reference frames uniformly
                 self.progress_buf[env_ids] = 0
                 self.offset_buf[env_ids] = 0
                 self.start_frame_offset = 0
                 self.reference_frame[env_ids] = 0
                 self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
                 self.copy_ref_pos_to_state(env_ids)
-                # # start pos randomization
+                with torch.no_grad():
+                    self.update_reference_model()
+                # start pos randomization
                 self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] = self.state.joint_q.view(self.num_envs, -1)[
                                                                            env_ids, 0:3] + 0.05 * (torch.rand(
                     size=(len(env_ids), 3), device=self.device) - 0.5) + torch.tensor([0.0, 0.025, 0.0], device=self.device).unsqueeze(0).repeat(len(env_ids), 1)
-                # # start rot randomization
+                # start rot randomization
                 angle = (torch.rand(len(env_ids), device=self.device) - 0.5) * np.pi / 36.0
                 axis = torch.nn.functional.normalize(torch.rand((len(env_ids), 3), device=self.device) - 0.5)
                 self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_mul(
                     self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7], tu.quat_from_angle_axis(angle, axis))
-                # # start vel randomization
+                # start vel randomization
                 self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] += 0.05 * (
                             torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
             else:
@@ -405,7 +402,8 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                 self.reference_frame[env_ids] = 0
                 self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
                 self.copy_ref_pos_to_state(env_ids)
-
+                with torch.no_grad():
+                    self.update_reference_model()
             # clear action
             self.actions = self.actions.clone()
             self.actions[env_ids, :] = torch.zeros((len(env_ids), self.num_actions), device=self.device,
