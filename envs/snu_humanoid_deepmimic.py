@@ -374,10 +374,9 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
             # copy the reference motion to the state
             # randomization
             if self.stochastic_init:
-                # TODO: randomize the reset start frame to learn all reference frames uniformly
                 self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = 0
-                self.start_frame_offset = 0
+                # randomize the reset start frame to learn all reference frames uniformly
+                self.offset_buf[env_ids] = torch.floor(torch.rand(len(env_ids), device=self.device) * (self.reference_frame_count * self.reference_frame_time / self.dt - 1) + 1).long()
                 self.reference_frame[env_ids] = 0
                 self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
                 self.copy_ref_pos_to_state(env_ids)
@@ -397,7 +396,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                             torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
             else:
                 self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = 0
+                self.offset_buf[env_ids] = 1
                 self.start_frame_offset = 0
                 self.reference_frame[env_ids] = 0
                 self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
