@@ -664,7 +664,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] = self.reference_joint_qd[frame_index[env_ids], :]
 
         # reset position
-        self.state.joint_q.view(self.num_envs, -1)[env_ids, :3] = self.start_pos
+        self.state.joint_q.view(self.num_envs, -1)[env_ids, :3] += self.start_reference_pos_offset[env_ids]
 
         if perform_forward_kinematics:
             body_X_sc, body_X_sm = eval_rigid_fk_grad(self.model, self.state.joint_q)
