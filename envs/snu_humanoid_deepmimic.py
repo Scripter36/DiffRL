@@ -176,10 +176,10 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.reference_frame = torch.zeros((self.num_envs), dtype=torch.long, device=self.device)
 
         # move ref pos to the initial pos
-        start_height = self.reference_joint_q[0, 1] - 0.12
+        start_height = self.reference_joint_q[0, 1] - 0.10
         self.start_pos = torch.tensor((0.0, start_height, 0.0), dtype=torch.float32, device=self.device)
         self.reference_pos_offset = self.start_pos.unsqueeze(0).repeat(self.num_envs, 1) - self.reference_joint_q[0, 0:3]
-        self.reference_pos_offset[:, 1] += 0.02
+        self.reference_pos_offset[:, 1] += 0.0
         self.start_reference_pos_offset = self.reference_pos_offset.clone()
 
         if (self.model.ground):
@@ -376,33 +376,33 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
             if self.stochastic_init:
                 self.progress_buf[env_ids] = 0
                 # randomize the reset start frame to learn all reference frames uniformly
-                self.offset_buf[env_ids] = torch.floor(torch.rand(len(env_ids), device=self.device) * (self.reference_frame_count * self.reference_frame_time / self.dt - 1) + 1).long()
+                self.offset_buf[env_ids] = torch.floor(torch.rand(len(env_ids), device=self.device) * (self.reference_frame_count * self.reference_frame_time / self.dt - 1)).long()
                 self.reference_frame[env_ids] = 0
                 self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
-                self.copy_ref_pos_to_state(env_ids)
+                self.copy_ref_pos_to_state(env_ids, perform_forward_kinematics=True)
                 with torch.no_grad():
                     self.update_reference_model()
-                # start pos randomization
-                self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] = self.state.joint_q.view(self.num_envs, -1)[
-                                                                           env_ids, 0:3] + 0.05 * (torch.rand(
-                    size=(len(env_ids), 3), device=self.device) - 0.5) + torch.tensor([0.0, 0.025, 0.0], device=self.device).unsqueeze(0).repeat(len(env_ids), 1)
-                # start rot randomization
-                angle = (torch.rand(len(env_ids), device=self.device) - 0.5) * np.pi / 36.0
-                axis = torch.nn.functional.normalize(torch.rand((len(env_ids), 3), device=self.device) - 0.5)
-                self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_mul(
-                    self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7], tu.quat_from_angle_axis(angle, axis))
-                # start vel randomization
-                self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] += 0.05 * (
-                            torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
+                    # start pos randomization
+                    # self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] += (torch.rand(
+                    #     size=(len(env_ids), 3), device=self.device) - 0.5) * torch.tensor([0.05, 0.0, 0.05], device=self.device).unsqueeze(0).repeat(len(env_ids), 1)
+                    # # start rot randomization
+                    # angle = (torch.rand(len(env_ids), device=self.device) - 0.5) * np.pi / 36.0
+                    # axis = torch.nn.functional.normalize(torch.rand((len(env_ids), 3), device=self.device) - 0.5)
+                    # self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_mul(
+                    #     self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7], tu.quat_from_angle_axis(angle, axis))
+                    # # start vel randomization
+                    # self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] += 0.05 * (
+                    #             torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
             else:
                 self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = 1
+                self.offset_buf[env_ids] = 0
                 self.start_frame_offset = 0
                 self.reference_frame[env_ids] = 0
                 self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
-                self.copy_ref_pos_to_state(env_ids)
+                self.copy_ref_pos_to_state(env_ids, perform_forward_kinematics=True)
                 with torch.no_grad():
                     self.update_reference_model()
+
             # clear action
             self.actions = self.actions.clone()
             self.actions[env_ids, :] = torch.zeros((len(env_ids), self.num_actions), device=self.device,
@@ -612,11 +612,14 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
         self.rew_buf[invalid_masks] = 0.0
 
+    def get_frame_indices(self):
+        return torch.round((torch.clamp(self.progress_buf + self.offset_buf, min=0) + self.start_frame_offset) * self.dt / self.reference_frame_time).long() % self.reference_frame_count
+
     def update_reference_model(self):
         """
         Update the reference model's state from the phase of the motion.
         """
-        frame_indices = torch.round((torch.clamp(self.progress_buf + self.offset_buf, min=0) + self.start_frame_offset) * self.dt / self.reference_frame_time).long() % self.reference_frame_count
+        frame_indices = self.get_frame_indices()
         next_state = self.reference_model.state()
 
         # if new frame index is less than the previous frame index, it means the reference model has looped
@@ -645,7 +648,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         
         self.reference_state = next_state
 
-    def copy_ref_pos_to_state(self, env_ids=None):
+    def copy_ref_pos_to_state(self, env_ids=None, perform_forward_kinematics=False):
         """
         Copy the reference motion to the state.
         """
@@ -655,10 +658,21 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.state.joint_q = self.state.joint_q.clone()
         self.state.joint_qd = self.state.joint_qd.clone()
 
-        frame_index = torch.round((torch.clamp(self.progress_buf + self.offset_buf, min=0) + self.start_frame_offset) * self.dt / self.reference_frame_time).long() % self.reference_frame_count
+        frame_index = self.get_frame_indices()
         # masked values are 0, so we don't need to use mask to select valid values
         self.state.joint_q.view(self.num_envs, -1)[env_ids, :] = self.reference_joint_q[frame_index[env_ids], :]
         self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] = self.reference_joint_qd[frame_index[env_ids], :]
 
         # reset position
         self.state.joint_q.view(self.num_envs, -1)[env_ids, :3] = self.start_pos
+
+        if perform_forward_kinematics:
+            body_X_sc, body_X_sm = eval_rigid_fk_grad(self.model, self.state.joint_q)
+            self.state.body_X_sc = body_X_sc
+            self.state.body_X_sm = body_X_sm
+            joint_S_s, body_I_s, body_v_s, body_f_s, body_a_s = eval_rigid_id_grad(self.model, self.state.joint_q, self.state.joint_qd, body_X_sc, body_X_sm)
+            self.state.joint_S_s = joint_S_s
+            self.state.body_I_s = body_I_s
+            self.state.body_v_s = body_v_s
+            self.state.body_f_s = body_f_s
+            self.state.body_a_s = body_a_s

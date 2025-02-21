@@ -62,6 +62,8 @@ class SHAC:
     def __init__(self, cfg, render_name=None):
         self.cfg = cfg
         seed = cfg["params"]["general"]["seed"]
+        stochastic_init = cfg["params"]["diff_env"].get("stochastic_env", True)
+
         if seed is not None:
             seeding(seed)
         if render_name is None:
@@ -73,7 +75,7 @@ class SHAC:
                             render = cfg["params"]["general"]["render"], \
                             seed = seed, \
                             episode_length=cfg["params"]["diff_env"].get("episode_length", 250), \
-                            stochastic_init = cfg["params"]["diff_env"].get("stochastic_env", True), \
+                            stochastic_init = stochastic_init, \
                             MM_caching_frequency = cfg["params"]['diff_env'].get('MM_caching_frequency', 1), \
                             no_grad = False, \
                             render_name = render_name)

@@ -120,11 +120,13 @@ class EvalRigidIDFunc(torch.autograd.Function):
         ctx.tape.replay()
 
         # find adjoint of inputs
+        inputs = df.adjoint.to_strong_list(ctx.input)
         adj_inputs = []
-        if ctx.input in ctx.tape.adjoints:
-            adj_inputs.append(ctx.tape.adjoints[ctx.input])
-        else:
-            adj_inputs.append(None)
+        for i in range(len(inputs)):
+            if inputs[i] in ctx.tape.adjoints:
+                adj_inputs.append(ctx.tape.adjoints[inputs[i]])
+            else:
+                adj_inputs.append(None)
 
         # free the tape
         ctx.tape.reset()

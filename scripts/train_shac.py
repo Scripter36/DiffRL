@@ -123,9 +123,10 @@ if __name__ == '__main__':
     if cfg_train["params"]["general"]["seed"] is None:
         cfg_train["params"]["general"]["seed"] = random.randint(0, 1000000)
 
-    # for playing, set the number of actors to 1 default
+    # for playing, set the number of actors to 1 default and use deterministic env
     if args.play or args.test:  
         cfg_train["params"]["config"]["num_actors"] = cfg_train["params"]["config"].get("player", {}).get("num_actors", 1)
+        cfg_train["params"]["diff_env"]["stochastic_env"] = False
 
     if not args.no_time_stamp:
         args.logdir = os.path.join(args.logdir, get_time_stamp())
