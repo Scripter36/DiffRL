@@ -10,6 +10,10 @@ import mlflow
 import mlflow.entities
 import mlflow.experiments
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # ANSI color codes
 YELLOW = "\033[93m"
 RESET = "\033[0m"
@@ -105,11 +109,10 @@ def main():
                         break
                     else:
                         raise Exception(f"Training failed with {num_tries} tries.")
+                except KeyboardInterrupt:
+                    print(f"{YELLOW}Training interrupted by user.{RESET}")
+                    sys.exit(0)
                 except Exception as e:
-                    # if interrupted by user, exit
-                    if type(e) == KeyboardInterrupt:
-                        print(f"{YELLOW}Training interrupted by user.{RESET}")  # Yellow text for status messages
-                        sys.exit(1)
                     print(f"{YELLOW}Error: {e}{RESET}")  # Yellow text for errors
                     print(f"{YELLOW}Restarting training... ({num_tries} tries){RESET}")  # Yellow text for errors
                     num_tries += 1
@@ -122,7 +125,7 @@ def main():
             
             # from mlflow, get the experiment list
             experiment_list = mlflow.search_experiments(mlflow.entities.ViewType.ACTIVE_ONLY)
-            experiment_list.sort(key=lambda x: x.experiment_id)
+            experiment_list.sort(key=lambda x: int(x.experiment_id))
             selected_experiment = prompt_choice_not_continuous(experiment_list, [experiment.experiment_id for experiment in experiment_list], [experiment.name for experiment in experiment_list], "Select an experiment by number")
             print(f"Selected experiment: {selected_experiment.name}")
 

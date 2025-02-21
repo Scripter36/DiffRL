@@ -105,6 +105,7 @@ inline CUDA_CALLABLE float acos(float x) { return std::acos(std::min(std::max(x,
 inline CUDA_CALLABLE float sin(float x) { return std::sin(x); }
 inline CUDA_CALLABLE float cos(float x) { return std::cos(x); }
 inline CUDA_CALLABLE float sqrt(float x) { return std::sqrt(x); }
+inline CUDA_CALLABLE float exp(float x) { return std::exp(x); }
 
 inline CUDA_CALLABLE void adj_mul(float a, float b, float& adj_a, float& adj_b, float adj_ret) { adj_a += b*adj_ret; adj_b += a*adj_ret; }
 inline CUDA_CALLABLE void adj_div(float a, float b, float& adj_a, float& adj_b, float adj_ret) { adj_a += adj_ret/b; adj_b -= adj_ret*(a/b)/b; }
@@ -219,6 +220,10 @@ inline CUDA_CALLABLE void adj_sqrt(float x, float& adj_x, float adj_ret)
     adj_x += 0.5f*(1.0/std::sqrt(x))*adj_ret;
 }
 
+inline CUDA_CALLABLE void adj_exp(float x, float &adj_x, float adj_ret)
+{
+    adj_x += std::exp(x) * adj_ret;
+}
 
 template <typename T>
 CUDA_CALLABLE inline T select(bool cond, const T& a, const T& b) { return cond?b:a; }

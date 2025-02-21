@@ -333,6 +333,9 @@ class Model:
         self.edge_kd = 0.0
 
         self.particle_radius = 0.1
+
+        # introduced in warp, to smooth the friction around vertical velocity
+        self.friction_smoothing = 1.0
         self.adapter = adapter
 
     def state(self) -> State:
@@ -1734,6 +1737,8 @@ class ModelBuilder:
         m.muscle_links = torch.tensor(self.muscle_links, dtype=torch.int32, device=adapter)
         m.muscle_points = torch.tensor(self.muscle_points, dtype=torch.float32, device=adapter)
         m.muscle_activation = torch.tensor(self.muscle_activation, dtype=torch.float32, device=adapter)
+        # length of muscle at rest position (l_mt0)
+        m.muscle_length = torch.ones(muscle_count, dtype=torch.float32, device=adapter)
 
         #--------------------------------------
         # articulations
@@ -1875,5 +1880,41 @@ class ModelBuilder:
 
         # allocate space for mass / jacobian matrices
         m.alloc_mass_matrix()
+
+        # initialize muscle length at rest
+        if muscle_count > 0:
+            state_in = m.state()
+            state_out = m.state()
+            if (m.link_count):
+                # evaluate body transforms
+                from dflex.sim import eval_rigid_fk, cache_muscle_length
+                eval_rigid_fk.forward_cuda(
+                    # dim
+                    m.articulation_count,
+                    # inputs
+                    m.articulation_joint_start,
+                    m.joint_type,
+                    m.joint_parent,
+                    m.joint_q_start,
+                    m.joint_qd_start,
+                    state_in.joint_q,
+                    m.joint_X_pj,
+                    m.joint_X_cm,
+                    m.joint_axis,
+                    # outputs
+                    state_out.body_X_sc,
+                    state_out.body_X_sm
+                )
+            # launch
+            cache_muscle_length.forward_cuda(
+                # dim
+                m.muscle_count,
+                # inputs
+                state_out.body_X_sc,
+                m.muscle_start,
+                m.muscle_links,
+                m.muscle_points,
+                # outputs
+                m.muscle_length)
 
         return m

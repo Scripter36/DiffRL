@@ -21,5 +21,7 @@ def get_activation_func(activation_name):
         return nn.ELU()
     elif activation_name.lower() == 'identity':
         return nn.Identity()
+    elif activation_name.lower() == 'silu':
+        return nn.SiLU()
     else:
         raise NotImplementedError('Actication func {} not defined'.format(activation_name))

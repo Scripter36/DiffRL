@@ -14,3 +14,4 @@ from envs.snu_humanoid_full import SNUHumanoidFullEnv
 from envs.cartpole_swing_up import CartPoleSwingUpEnv
 from envs.humanoid import HumanoidEnv
 from envs.snu_humanoid_full_deepmimic import SNUHumanoidFullDeepMimicEnv
+from envs.snu_humanoid_deepmimic import SNUHumanoidDeepMimicEnv

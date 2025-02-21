@@ -283,7 +283,11 @@ class SqrtFunc:
     def value_type(args):
         return float
 
-
+@builtin("exp")
+class ExpFunc:
+    @staticmethod
+    def value_type(args):
+        return float
 
 @builtin("dot")
 class DotFunc:

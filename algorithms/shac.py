@@ -5,8 +5,6 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
-import json
-from multiprocessing.sharedctypes import Value
 import sys, os
 
 from torch.nn.utils.clip_grad import clip_grad_norm_
@@ -23,7 +21,7 @@ from tensorboardX import SummaryWriter
 import yaml
 import mlflow
 from mlflow.entities import Metric
-from utils.mlflow_utils import mlflow_manager
+from utils.mlflow_utils import enqueue_model_save, get_mlflow_client, stop_save_worker
 import dflex as df
 
 import envs
@@ -37,7 +35,6 @@ from utils.time_report import TimeReport
 from utils.average_meter import AverageMeter
 
 import torch.nn as nn
-import threading
 
 class SHACCheckpoint(nn.Module):
     def __init__(self, actor, critic, target_critic, obs_rms, ret_rms):
@@ -47,15 +44,29 @@ class SHACCheckpoint(nn.Module):
         self.target_critic = target_critic
         self.obs_rms = obs_rms
         self.ret_rms = ret_rms
+
     def forward(self, x):
         raise NotImplementedError("This checkpoint model is for storage only and not for inference")
+    
+    def cpu(self):
+        # Clone models and move to CPU
+        actor_cpu = copy.deepcopy(self.actor).to('cpu')
+        critic_cpu = copy.deepcopy(self.critic).to('cpu')
+        target_critic_cpu = copy.deepcopy(self.target_critic).to('cpu')
+        # already copied, do not need to copy again
+        obs_rms_cpu = self.obs_rms.to('cpu') if self.obs_rms is not None else None
+        ret_rms_cpu = self.ret_rms.to('cpu') if self.ret_rms is not None else None
+        return SHACCheckpoint(actor_cpu, critic_cpu, target_critic_cpu, obs_rms_cpu, ret_rms_cpu)
 
 class SHAC:
-    def __init__(self, cfg, checkpoint=None):
+    def __init__(self, cfg, render_name=None):
         self.cfg = cfg
         seed = cfg["params"]["general"]["seed"]
         if seed is not None:
             seeding(seed)
+        if render_name is None:
+            # use experiment name
+            render_name = mlflow.get_experiment(mlflow.active_run().info.experiment_id).name
         env_fn = getattr(envs, cfg["params"]["diff_env"]["name"])
         self.env = env_fn(num_envs = cfg["params"]["config"]["num_actors"], \
                             device = cfg["params"]["general"]["device"], \
@@ -64,7 +75,8 @@ class SHAC:
                             episode_length=cfg["params"]["diff_env"].get("episode_length", 250), \
                             stochastic_init = cfg["params"]["diff_env"].get("stochastic_env", True), \
                             MM_caching_frequency = cfg["params"]['diff_env'].get('MM_caching_frequency', 1), \
-                            no_grad = False)
+                            no_grad = False, \
+                            render_name = render_name)
 
         print('num_envs = ', self.env.num_envs)
         print('num_actions = ', self.env.num_actions)
@@ -92,17 +104,10 @@ class SHAC:
 
         self.obs_rms = None
         if cfg['params']['config'].get('obs_rms', False):
-            if checkpoint is not None:
-                self.obs_rms = checkpoint.obs_rms
-            else:
-                self.obs_rms = RunningMeanStd(shape = (self.num_obs), device = self.device)
-            
+            self.obs_rms = RunningMeanStd(shape = (self.num_obs), device = self.device)
         self.ret_rms = None
         if cfg['params']['config'].get('ret_rms', False):
-            if checkpoint is not None:
-                self.ret_rms = checkpoint.ret_rms
-            else:
-                self.ret_rms = RunningMeanStd(shape = (), device = self.device)
+            self.ret_rms = RunningMeanStd(shape = (), device = self.device)
 
         self.rew_scale = cfg['params']['config'].get('rew_scale', 1.0)
 
@@ -139,21 +144,16 @@ class SHAC:
             self.steps_num = self.env.episode_length
 
         # create actor critic network
-        if checkpoint is not None:
-            self.actor = checkpoint.actor
-            self.critic = checkpoint.critic
-            self.target_critic = checkpoint.target_critic
-        else:
-            self.actor_name = cfg["params"]["network"].get("actor", 'ActorStochasticMLP') # choices: ['ActorDeterministicMLP', 'ActorStochasticMLP']
-            self.critic_name = cfg["params"]["network"].get("critic", 'CriticMLP')
-            actor_fn = getattr(models.actor, self.actor_name)
-            self.actor = actor_fn(self.num_obs, self.num_actions, cfg['params']['network'], device = self.device)
-            critic_fn = getattr(models.critic, self.critic_name)
-            self.critic = critic_fn(self.num_obs, cfg['params']['network'], device = self.device)
-            self.target_critic = copy.deepcopy(self.critic)
+        self.actor_name = cfg["params"]["network"].get("actor", 'ActorStochasticMLP') # choices: ['ActorDeterministicMLP', 'ActorStochasticMLP']
+        self.critic_name = cfg["params"]["network"].get("critic", 'CriticMLP')
+        actor_fn = getattr(models.actor, self.actor_name)
+        self.actor = actor_fn(self.num_obs, self.num_actions, cfg['params']['network'], device = self.device)
+        critic_fn = getattr(models.critic, self.critic_name)
+        self.critic = critic_fn(self.num_obs, cfg['params']['network'], device = self.device)
+        self.target_critic = copy.deepcopy(self.critic)
         self.all_params = list(self.actor.parameters()) + list(self.critic.parameters())
     
-        if cfg['params']['general']['train'] and checkpoint is None:
+        if cfg['params']['general']['train']:
             self.save('init_policy')
     
         # initialize optimizer
@@ -481,7 +481,7 @@ class SHAC:
 
             self.time_report.start_timer("backward simulation")
 
-            if self.use_grad_per_env:   
+            if self.use_grad_per_env:
                 parameters = list(self.actor.parameters())
                 final_grads = []
                 self.valid_env_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
@@ -638,27 +638,21 @@ class SHAC:
             all_metrics = []
             timestamp_now = round(time.time() * 1000)
             all_metrics.append(Metric(key="lr_iter", value=lr, step=self.iter_count, timestamp=timestamp_now))
-            all_metrics.append(Metric(key="actor_loss_step", value=self.actor_loss, step=self.step_count, timestamp=timestamp_now))
             all_metrics.append(Metric(key="actor_loss_iter", value=self.actor_loss, step=self.iter_count, timestamp=timestamp_now))
-            all_metrics.append(Metric(key="value_loss_step", value=self.value_loss, step=self.step_count, timestamp=timestamp_now))
             all_metrics.append(Metric(key="value_loss_iter", value=self.value_loss, step=self.iter_count, timestamp=timestamp_now))
             if len(self.episode_loss_his) > 0:
-                all_metrics.append(Metric(key="policy_loss_step", value=mean_policy_loss, step=self.step_count, timestamp=timestamp_now))
                 all_metrics.append(Metric(key="policy_loss_iter", value=mean_policy_loss, step=self.iter_count, timestamp=timestamp_now))
-                all_metrics.append(Metric(key="rewards_step", value=-mean_policy_loss, step=self.step_count, timestamp=timestamp_now))
                 all_metrics.append(Metric(key="rewards_iter", value=-mean_policy_loss, step=self.iter_count, timestamp=timestamp_now))
-                all_metrics.append(Metric(key="policy_discounted_loss_step", value=mean_policy_discounted_loss, step=self.step_count, timestamp=timestamp_now   ))
                 all_metrics.append(Metric(key="policy_discounted_loss_iter", value=mean_policy_discounted_loss, step=self.iter_count, timestamp=timestamp_now))
-                all_metrics.append(Metric(key="best_policy_loss_step", value=self.best_policy_loss, step=self.step_count, timestamp=timestamp_now))
                 all_metrics.append(Metric(key="best_policy_loss_iter", value=self.best_policy_loss, step=self.iter_count, timestamp=timestamp_now))
                 all_metrics.append(Metric(key="episode_lengths_iter", value=mean_episode_length, step=self.iter_count, timestamp=timestamp_now))
-                all_metrics.append(Metric(key="episode_lengths_step", value=mean_episode_length, step=self.step_count, timestamp=timestamp_now))
+                all_metrics.append(Metric(key="grad_norm_before_clip_iter", value=self.grad_norm_before_clip, step=self.iter_count, timestamp=timestamp_now))
 
-            mlflow_manager.mlflow_client.log_batch(mlflow_manager.active_run.info.run_id, all_metrics)
+            get_mlflow_client().log_batch(mlflow.active_run().info.run_id, all_metrics)
             # ---- End MLFlow logging ----
 
             if self.save_interval > 0 and (self.iter_count % self.save_interval == 0):
-                self.save(self.name + "policy_iter{}_reward{:.3f}".format(self.iter_count, -mean_policy_loss))
+                self.save(f"iter{self.iter_count}_reward{-mean_policy_loss:.3f}")
 
             # update target critic
             with torch.no_grad():
@@ -693,33 +687,7 @@ class SHAC:
     def save(self, filename = None):
         if filename is None:
             filename = 'best_policy'
-        # Define a wrapper module to bundle multiple components for saving.
-
-        # Clone models and move to CPU
-        actor_cpu = copy.deepcopy(self.actor).to('cpu')
-        critic_cpu = copy.deepcopy(self.critic).to('cpu')
-        target_critic_cpu = copy.deepcopy(self.target_critic).to('cpu')
-        # already copied, do not need to copy again
-        obs_rms_cpu = self.obs_rms.to('cpu') if self.obs_rms is not None else None
-        ret_rms_cpu = self.ret_rms.to('cpu') if self.ret_rms is not None else None
-        
-        checkpoint_model = SHACCheckpoint(actor_cpu, critic_cpu, target_critic_cpu, obs_rms_cpu, ret_rms_cpu)
-
-        def save_checkpoint():
-            # https://github.com/mlflow/mlflow/issues/10802
-            # to ensure only one log per filename, parse the tag and delete the existing one
-            run = mlflow.get_run(mlflow_manager.active_run.info.run_id)
-            if 'mlflow.log-model.history' in run.data.tags:
-                history = json.loads(run.data.tags['mlflow.log-model.history'])
-                # delete the existing one
-                history = [item for item in history if item['artifact_path'] != filename]
-                # save the new history
-                mlflow.set_tag('mlflow.log-model.history', json.dumps(history))
-            mlflow.pytorch.log_model(checkpoint_model, filename, run_id=mlflow_manager.active_run.info.run_id)
-
-        # Run save in separate thread
-        save_thread = threading.Thread(target=save_checkpoint)
-        save_thread.start()
+        enqueue_model_save(SHACCheckpoint(self.actor, self.critic, self.target_critic, self.obs_rms, self.ret_rms).cpu(), filename)
 
     def load(self, path):
         print("Loading checkpoint from", path)
@@ -732,4 +700,4 @@ class SHAC:
 
     def close(self):
         self.writer.close()
-    
+        stop_save_worker()
