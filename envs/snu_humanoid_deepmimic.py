@@ -54,7 +54,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.num_muscles = 152
 
         num_act = self.num_muscles
-        num_obs = 165
+        num_obs = self.phase_range.stop
 
         super(SNUHumanoidDeepMimicEnv, self).__init__(num_envs, num_obs, num_act, episode_length, MM_caching_frequency, seed,
                                                  no_grad, render, render_name, device)
@@ -262,7 +262,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                 self.renderer.add_sphere((10, self.obs_buf[0, -1], 10), 0.1, "phase", self.render_time)
 
                 # com_pos: add sphere
-                com_pos = self.obs_buf[0, 7:10].view(-1).clone()
+                com_pos = self.obs_buf[0, self.com_pos_range].view(-1).clone()
                 com_pos[0] += 2
                 self.renderer.add_sphere(com_pos.tolist(), 0.1, "com", self.render_time)
 
@@ -465,9 +465,14 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         root_pos = root_transform[:, 0:3]
         root_rot = root_transform[:, 3:7]
 
+        root_pos_xz = root_pos.clone()
+        root_pos_xz[:, 1] = 0.0
+
         # DeepMimic states (observations): each link's position and rotation relative to the root joint, phase of the motion
         # 1. compute relative body X_sc
         body_X_sc = self.state.body_X_sc.view(self.num_envs, -1, 7)
+        body_X_sc_local = body_X_sc.clone()
+        body_X_sc_local[:, :, 0:3] = body_X_sc[:, :, 0:3] - root_pos_xz.unsqueeze(1).repeat(1, body_X_sc.shape[1], 1)
     
         # 2. compute phase of the motion
         progress_time = torch.clamp((self.progress_buf + self.offset_buf) * self.dt, min=0.0)
@@ -476,6 +481,11 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
         # 3. calculate the center of mass position
         com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.state.body_X_sm.view(self.num_envs, -1, 7))
+        com_pos_local = com_pos - root_pos_xz
+
+        # calculate distance to reference com pos
+        ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
+        com_pos_diff = com_pos - ref_com_pos
         
         lin_vel = self.state.joint_qd.view(self.num_envs, -1)[:, 3:6]
         ang_vel = self.state.joint_qd.view(self.num_envs, -1)[:, 0:3]
@@ -490,24 +500,32 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         up_vec = tu.quat_rotate(root_rot, self.basis_vec1)
         heading_vec = tu.quat_rotate(root_rot, self.basis_vec0)
 
-        # add distance to reference com pos
-        ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
-        com_pos_diff = com_pos - ref_com_pos
-
         # TODO: check if we can add phase (which is not differentiable) in observations
         self.obs_buf = torch.cat([
-            root_pos.view(self.num_envs, -1), # 0:3
-            root_rot.view(self.num_envs, -1), # 3:7
-            com_pos.view(self.num_envs, -1), # 7:10
-            lin_vel.view(self.num_envs, -1), # 10:13
-            ang_vel.view(self.num_envs, -1), # 13:16
-            up_vec[:, 1:2],  # 16:17
-            (heading_vec * target_dirs).sum(dim=-1).unsqueeze(-1), # 17:18
-            com_pos_diff.view(self.num_envs, -1), # 18:21
-            body_X_sc.view(self.num_envs, -1), # 21:98
-            self.joint_vel_obs_scaling * self.state.body_v_s.view(self.num_envs, -1), # 98:164
-            phase.view(self.num_envs, 1), # 164
+            root_pos[:, 1:2].view(self.num_envs, -1), # 0:1
+            root_rot.view(self.num_envs, -1), # 1:5
+            com_pos_local.view(self.num_envs, -1), # 5:8
+            lin_vel.view(self.num_envs, -1), # 8:11
+            ang_vel.view(self.num_envs, -1), # 11:14
+            up_vec[:, 1:2],  # 14:15
+            (heading_vec * target_dirs).sum(dim=-1).unsqueeze(-1), # 15:16
+            com_pos_diff.view(self.num_envs, -1), # 16:19
+            body_X_sc_local.view(self.num_envs, -1), # 19:96
+            self.joint_vel_obs_scaling * self.state.body_v_s.view(self.num_envs, -1), # 96:162
+            phase.view(self.num_envs, 1), # 162
         ], dim=-1)
+
+    root_height_range = range(0, 1)
+    root_rot_range = range(1, 5)
+    com_pos_range = range(5, 8)
+    lin_vel_range = range(8, 11)
+    ang_vel_range = range(11, 14)
+    up_vec_range = range(14, 15)
+    heading_vec_range = range(15, 16)
+    com_pos_diff_range = range(16, 19)
+    body_X_sc_local_range = range(19, 96)
+    joint_vel_range = range(96, 162)
+    phase_range = range(162, 163)
 
     def calculateReward(self):
         # DeepMimic reward: pose reward + velocity reward + end-effector reward + center-of-mass reward
@@ -516,10 +534,9 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         w_e = 0.15
         w_c = 0.1
 
-        # relative body X_sc for reference state
-        body_X_sc = self.obs_buf[:, 21:98].view(self.num_envs, -1, 7)
-        body_v_s = self.obs_buf[:, 98:164].view(self.num_envs, -1, 6)
-        # ref_root_transform = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
+        # body transforms and velocities
+        body_X_sc = self.state.body_X_sc.view(self.num_envs, -1, 7)
+        body_v_s = self.state.body_v_s.view(self.num_envs, -1, 6)
         ref_body_X_sc = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)
         ref_body_v_s = self.reference_state.body_v_s.view(self.num_envs, -1, 6)
 
@@ -530,8 +547,8 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
 
         # velocity reward: exp(-0.1 * sum(body w, ref body w diff **2))
-        body_w_diff = body_v_s[:, :, 0:3] - ref_body_v_s[:, :, 0:3]
-        vel_reward = torch.exp(-0.1 * torch.sum(torch.sum(body_w_diff ** 2, dim=-1), dim=-1))
+        # body_w_diff = body_v_s[:, :, 0:3] - ref_body_v_s[:, :, 0:3]
+        # vel_reward = torch.exp(-0.1 * torch.sum(torch.sum(body_w_diff ** 2, dim=-1), dim=-1))
 
         # end-effector reward: exp(-40 * sum(end-effector pos, ref end-effector pos diff **2))
         # let's compare end-effector pos in local frame
@@ -541,9 +558,9 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         end_effector_reward = torch.exp(-5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
 
         # center-of-mass reward: exp(-10 * sum(com pos, ref com pos diff **2))
-        com_pos = self.obs_buf[:, 7:10]
-        ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
-        com_pos_diff = com_pos - ref_com_pos
+        # com_pos = self.obs_buf[:, self.com_pos_range]
+        # ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
+        com_pos_diff = self.obs_buf[:, self.com_pos_diff_range]
         com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
 
         # imitation_reward = w_p * pos_reward + w_v * vel_reward + w_e * end_effector_reward + w_c * com_reward
@@ -579,7 +596,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.rew_buf = imitation_reward
 
         # reset agents (early termination)
-        self.reset_buf = torch.where(self.obs_buf[:, 1] < self.termination_height, torch.ones_like(self.reset_buf),
+        self.reset_buf = torch.where(self.obs_buf[:, self.root_height_range].squeeze(-1) < self.termination_height, torch.ones_like(self.reset_buf),
                                         self.reset_buf)
         
         # # if pos reward is less than -1, reset
