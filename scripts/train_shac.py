@@ -127,6 +127,7 @@ if __name__ == '__main__':
     if args.play or args.test:  
         cfg_train["params"]["config"]["num_actors"] = cfg_train["params"]["config"].get("player", {}).get("num_actors", 1)
         cfg_train["params"]["diff_env"]["stochastic_env"] = False
+        cfg_train["params"]["config"]["player"]["determenistic"] = True
 
     if not args.no_time_stamp:
         args.logdir = os.path.join(args.logdir, get_time_stamp())

@@ -142,8 +142,11 @@ class SHAC:
             # stochastic inference
             self.stochastic_evaluation = True
         else:
-            self.stochastic_evaluation = not (cfg['params']['config']['player'].get('determenistic', False) or cfg['params']['config']['player'].get('deterministic', False))
+            user_wants_deterministic = cfg['params']['config']['player'].get('deterministic', False) or cfg['params']['config']['player'].get('determenistic', False)
+            self.stochastic_evaluation = not user_wants_deterministic
             self.steps_num = self.env.episode_length
+        
+        set_torch_deterministic(self.stochastic_evaluation)
 
         # create actor critic network
         self.actor_name = cfg["params"]["network"].get("actor", 'ActorStochasticMLP') # choices: ['ActorDeterministicMLP', 'ActorStochasticMLP']
@@ -348,7 +351,7 @@ class SHAC:
         self.step_count += self.steps_num * self.num_envs
 
         if self.use_grad_per_env:
-            return actor_loss_per_env
+            return torch.mean(actor_loss_per_env)
         else:
             return actor_loss
     
@@ -372,7 +375,7 @@ class SHAC:
                 if self.obs_rms is not None:
                     obs = self.obs_rms.normalize(obs)
 
-                actions = self.actor(obs, deterministic = deterministic)
+                actions = self.actor(obs, deterministic=deterministic)
 
                 obs, rew, done, _ = self.env.step(torch.tanh(actions))
 

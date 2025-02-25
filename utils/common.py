@@ -69,7 +69,7 @@ import numpy as np
 import random
 import os
 
-def seeding(seed=0, torch_deterministic=False):
+def seeding(seed=0):
     print("Setting seed: {}".format(seed))
 
     random.seed(seed)
@@ -79,6 +79,9 @@ def seeding(seed=0, torch_deterministic=False):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
+    return seed
+
+def set_torch_deterministic(torch_deterministic=True):
     if torch_deterministic:
         # refer to https://docs.nvidia.com/cuda/cublas/index.html#cublasApi_reproducibility
         os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
@@ -88,5 +91,3 @@ def seeding(seed=0, torch_deterministic=False):
     else:
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.deterministic = False
-
-    return seed
