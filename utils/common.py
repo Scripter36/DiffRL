@@ -69,6 +69,28 @@ import numpy as np
 import random
 import os
 
+current_rng_state = None
+
+def save_rng_state():
+    global current_rng_state
+    current_rng_state = {
+        'random': random.getstate(),
+        'np': np.random.get_state(),
+        'torch': torch.get_rng_state(),
+        'cuda': torch.cuda.get_rng_state() if torch.cuda.is_available() else None
+    }
+
+def restore_rng_state():
+    global current_rng_state
+    if current_rng_state is None:
+        return
+    random.setstate(current_rng_state['random'])
+    np.random.set_state(current_rng_state['np'])
+    torch.set_rng_state(current_rng_state['torch'])
+    if torch.cuda.is_available():
+        torch.cuda.set_rng_state(current_rng_state['cuda'])
+
+
 def seeding(seed=0):
     print("Setting seed: {}".format(seed))
 

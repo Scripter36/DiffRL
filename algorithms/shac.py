@@ -66,6 +66,7 @@ class SHAC:
 
         if seed is not None:
             seeding(seed)
+            save_rng_state()
         if render_name is None:
             # use experiment name
             render_name = mlflow.get_experiment(mlflow.active_run().info.experiment_id).name
@@ -357,6 +358,9 @@ class SHAC:
     
     @torch.no_grad()
     def evaluate_policy(self, num_games, deterministic = False):
+        if deterministic:
+            restore_rng_state()
+
         episode_length_his = []
         episode_loss_his = []
         episode_discounted_loss_his = []

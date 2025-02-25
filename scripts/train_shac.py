@@ -111,10 +111,12 @@ if __name__ == '__main__':
         with open(args.cfg, 'r') as f:
             cfg_train = yaml.load(f, Loader=yaml.SafeLoader)
 
-    # override the parameters with the command line arguments
-    cfg_train["params"]["general"] = {}
+    # override the parameters with the command line arguments, but keep the seed
+    cfg_train["params"]["general"] = {
+        "seed": cfg_train["params"]["general"].get("seed", random.randint(0, 1000000))
+    }
     for key in vargs.keys():
-        if vargs[key] is not None: 
+        if vargs[key] is not None:
             cfg_train["params"]["general"][key] = vargs[key]
         else:
             cfg_train["params"]["general"][key] = cfg_train["params"]["general"].get(key, None)
