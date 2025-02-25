@@ -62,8 +62,11 @@ class SHAC:
     def __init__(self, cfg, render_name=None):
         self.cfg = cfg
         seed = cfg["params"]["general"]["seed"]
+        stochastic_init = cfg["params"]["diff_env"].get("stochastic_env", True)
+
         if seed is not None:
             seeding(seed)
+            save_rng_state()
         if render_name is None:
             # use experiment name
             render_name = mlflow.get_experiment(mlflow.active_run().info.experiment_id).name
@@ -73,7 +76,7 @@ class SHAC:
                             render = cfg["params"]["general"]["render"], \
                             seed = seed, \
                             episode_length=cfg["params"]["diff_env"].get("episode_length", 250), \
-                            stochastic_init = cfg["params"]["diff_env"].get("stochastic_env", True), \
+                            stochastic_init = stochastic_init, \
                             MM_caching_frequency = cfg["params"]['diff_env'].get('MM_caching_frequency', 1), \
                             no_grad = False, \
                             render_name = render_name)
@@ -140,8 +143,11 @@ class SHAC:
             # stochastic inference
             self.stochastic_evaluation = True
         else:
-            self.stochastic_evaluation = not (cfg['params']['config']['player'].get('determenistic', False) or cfg['params']['config']['player'].get('deterministic', False))
+            user_wants_deterministic = cfg['params']['config']['player'].get('deterministic', False) or cfg['params']['config']['player'].get('determenistic', False)
+            self.stochastic_evaluation = not user_wants_deterministic
             self.steps_num = self.env.episode_length
+        
+        set_torch_deterministic(self.stochastic_evaluation)
 
         # create actor critic network
         self.actor_name = cfg["params"]["network"].get("actor", 'ActorStochasticMLP') # choices: ['ActorDeterministicMLP', 'ActorStochasticMLP']
@@ -346,12 +352,15 @@ class SHAC:
         self.step_count += self.steps_num * self.num_envs
 
         if self.use_grad_per_env:
-            return actor_loss_per_env
+            return torch.mean(actor_loss_per_env)
         else:
             return actor_loss
     
     @torch.no_grad()
     def evaluate_policy(self, num_games, deterministic = False):
+        if deterministic:
+            restore_rng_state()
+
         episode_length_his = []
         episode_loss_his = []
         episode_discounted_loss_his = []
@@ -370,7 +379,7 @@ class SHAC:
                 if self.obs_rms is not None:
                     obs = self.obs_rms.normalize(obs)
 
-                actions = self.actor(obs, deterministic = deterministic)
+                actions = self.actor(obs, deterministic=deterministic)
 
                 obs, rew, done, _ = self.env.step(torch.tanh(actions))
 
