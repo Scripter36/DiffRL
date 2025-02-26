@@ -410,10 +410,6 @@ class SHAC:
                 env_bars[done_env_id].close()
                 env_bars[done_env_id] = tqdm(total=self.env.episode_length, desc='Evaluating policy', position=done_env_id+1)
         game_bar.close()
-
-        # if env has 'finalize_play' method, call it
-        if hasattr(self.env, 'finalize_play'):
-            self.env.finalize_play()
         
         mean_episode_length = np.mean(np.array(episode_length_his))
         mean_policy_loss = np.mean(np.array(episode_loss_his))
