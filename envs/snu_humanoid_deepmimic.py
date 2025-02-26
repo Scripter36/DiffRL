@@ -262,7 +262,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                 self.renderer.add_sphere((10, self.obs_buf[0, -1], 10), 0.1, "phase", self.render_time)
 
                 # com_pos: add sphere
-                com_pos = self.obs_buf[0, self.com_pos_range].view(-1).clone()
+                com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.state.body_X_sm.view(self.num_envs, -1, 7)).view(-1, 3)[0, :]
                 com_pos[0] += 2
                 self.renderer.add_sphere(com_pos.tolist(), 0.1, "com", self.render_time)
 
