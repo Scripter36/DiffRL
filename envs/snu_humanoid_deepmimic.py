@@ -378,7 +378,9 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
             if self.stochastic_init:
                 self.progress_buf[env_ids] = 0
                 # randomize the reset start frame to learn all reference frames uniformly
-                self.offset_buf[env_ids] = torch.floor(torch.rand(len(env_ids), device=self.device) * (self.reference_frame_count * self.reference_frame_time / self.dt - 1)).long()
+                # self.offset_buf[env_ids] = torch.floor(torch.rand(len(env_ids), device=self.device) * (self.reference_frame_count * self.reference_frame_time / self.dt - 1)).long()
+                self.offset_buf[env_ids] = 0
+                self.start_frame_offset = 0
                 self.reference_frame[env_ids] = 0
                 self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
                 self.copy_ref_pos_to_state(env_ids, perform_forward_kinematics=True)
@@ -424,6 +426,9 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                 checkpoint = {}  # NOTE: any other things to restore?
                 checkpoint['joint_q'] = self.state.joint_q.clone()
                 checkpoint['joint_qd'] = self.state.joint_qd.clone()
+                checkpoint['body_X_sc'] = self.state.body_X_sc.clone()
+                checkpoint['body_X_sm'] = self.state.body_X_sm.clone()
+                checkpoint['body_v_s'] = self.state.body_v_s.clone()
                 checkpoint['actions'] = self.actions.clone()
                 checkpoint['progress_buf'] = self.progress_buf.clone()
                 checkpoint['obs_buf'] = self.obs_buf.clone()
@@ -433,6 +438,9 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
             self.state = self.model.state()
             self.state.joint_q = current_joint_q
             self.state.joint_qd = current_joint_qd
+            self.state.body_X_sc = checkpoint['body_X_sc'].clone()
+            self.state.body_X_sm = checkpoint['body_X_sm'].clone()
+            self.state.body_v_s = checkpoint['body_v_s'].clone()
             self.actions = checkpoint['actions'].clone()
             self.progress_buf = checkpoint['progress_buf'].clone()
             self.obs_buf = checkpoint['obs_buf'].clone()
@@ -546,7 +554,8 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         body_quat = body_X_sc[:, :, 3:7]
         ref_body_quat = ref_body_X_sc[:, :, 3:7]
         body_quat_diff = tu.quat_diff(body_quat, ref_body_quat)
-        pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
+        # pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
+        pos_reward = -0.1 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1)
 
         # velocity reward: exp(-0.1 * sum(body w, ref body w diff **2))
         # body_w_diff = body_v_s[:, :, 0:3] - ref_body_v_s[:, :, 0:3]
@@ -558,16 +567,19 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         ref_end_effector_pos = ref_body_X_sc[:, self.end_effector_indices, 0:3]
         end_effector_pos_diff = end_effector_pos - ref_end_effector_pos
         end_effector_reward = torch.exp(-5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
+        # end_effector_reward = -0.2 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1)
 
         # center-of-mass reward: exp(-10 * sum(com pos, ref com pos diff **2))
         # com_pos = self.obs_buf[:, self.com_pos_range]
         # ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
         com_pos_diff = self.obs_buf[:, self.com_pos_diff_range]
         com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
+        # com_reward = -1 * torch.sum(com_pos_diff ** 2, dim=-1)
 
         # imitation_reward = w_p * pos_reward + w_v * vel_reward + w_e * end_effector_reward + w_c * com_reward
         # instead, use multiplied reward
-        imitation_reward = pos_reward * com_reward * end_effector_reward
+        imitation_reward = pos_reward * end_effector_reward * com_reward
+        # live_reward = torch.ones_like(imitation_reward) * 0.3
 
         # goal reward
         # up_reward = 0.1 * self.obs_buf[:, 17]
@@ -598,15 +610,14 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.rew_buf = imitation_reward
 
         # reset agents (early termination)
-        self.reset_buf = torch.where(self.obs_buf[:, self.root_height_range].squeeze(-1) < self.termination_height, torch.ones_like(self.reset_buf),
-                                        self.reset_buf)
+        self.reset_buf = torch.where(self.obs_buf[:, self.root_height_range].squeeze(-1) < self.termination_height, torch.ones_like(self.reset_buf), self.reset_buf)
         
         # # if pos reward is less than -1, reset
         # body_pos_diff = relative_body_X_sc[:, :, 0:3] - ref_relative_body_X_sc[:, :, 0:3]
         # self.reset_buf = torch.where(torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1) > 0.2, torch.ones_like(self.reset_buf),
         #                                 self.reset_buf)
         # if imitation reward is less than 0.3, reset
-        self.reset_buf = torch.where(imitation_reward < 0.1, torch.ones_like(self.reset_buf), self.reset_buf)
+        self.reset_buf = torch.where(imitation_reward < -2, torch.ones_like(self.reset_buf), self.reset_buf)
         
         # normal termination
         self.reset_buf = torch.where(self.progress_buf > self.episode_length - 1, torch.ones_like(self.reset_buf),
@@ -644,7 +655,10 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         # if new frame index is less than the previous frame index, it means the reference model has looped
         loop_indices = torch.nonzero(frame_indices < self.reference_frame).squeeze(-1)
         # if looped, update the offset to connect the loop
-        self.reference_pos_offset[loop_indices] += self.reference_joint_q[self.reference_frame[loop_indices], :3] - self.reference_joint_q[frame_indices[loop_indices], :3]
+        diff = self.reference_joint_q[self.reference_frame[loop_indices], :3] - self.reference_joint_q[frame_indices[loop_indices], :3]
+        # prevent height error
+        diff[:, 1] = 0.0
+        self.reference_pos_offset[loop_indices] += diff
         self.reference_frame = frame_indices
 
         # update joint_q and joint_qd

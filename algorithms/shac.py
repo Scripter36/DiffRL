@@ -352,7 +352,7 @@ class SHAC:
         self.step_count += self.steps_num * self.num_envs
 
         if self.use_grad_per_env:
-            return torch.mean(actor_loss_per_env)
+            return actor_loss_per_env
         else:
             return actor_loss
     

@@ -113,7 +113,7 @@ if __name__ == '__main__':
 
     # override the parameters with the command line arguments, but keep the seed
     cfg_train["params"]["general"] = {
-        "seed": cfg_train["params"]["general"].get("seed", random.randint(0, 1000000))
+        "seed": cfg_train["params"].get("general", {}).get("seed", random.randint(0, 1000000))
     }
     for key in vargs.keys():
         if vargs[key] is not None:
