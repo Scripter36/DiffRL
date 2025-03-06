@@ -80,7 +80,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         if (self.visualize):
             if self.render_name is None:
                 self.render_name = "HumanoidSNU_Low_DeepMimic_" + str(self.num_envs)
-            self.stage = Usd.Stage.CreateNew("outputs/" + self.render_name + ".usd")
+            self.stage = Usd.Stage.CreateInMemory(self.render_name + ".usd")
 
             self.renderer = df.UsdRenderer(self.model, self.stage, draw_ground=False)
             self.render_time = 0.0
@@ -276,7 +276,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
     def finalize_play(self):
         if self.visualize:
             try:
-                self.stage.Save()
+                self.stage.GetRootLayer().Export(f"outputs/{self.render_name}.usd")
                 print(f"Saved to outputs/{self.render_name}.usd")
             except Exception as e:
                 print(f"USD save error: {e}")
@@ -548,8 +548,8 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         body_quat = body_X_sc[:, :, 3:7]
         ref_body_quat = ref_body_X_sc[:, :, 3:7]
         body_quat_diff = tu.quat_diff(body_quat, ref_body_quat)
-        pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
-        # pos_reward = -0.1 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1)
+        # pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
+        pos_reward = -2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1)
 
         # velocity reward: exp(-0.1 * sum(body w, ref body w diff **2))
         # body_w_diff = body_v_s[:, :, 0:3] - ref_body_v_s[:, :, 0:3]
@@ -560,20 +560,20 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         end_effector_pos = body_X_sc[:, self.end_effector_indices, 0:3]
         ref_end_effector_pos = ref_body_X_sc[:, self.end_effector_indices, 0:3]
         end_effector_pos_diff = end_effector_pos - ref_end_effector_pos
-        end_effector_reward = torch.exp(-5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
-        # end_effector_reward = -0.2 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1)
+        # end_effector_reward = torch.exp(-5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
+        end_effector_reward = -5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1)
 
         # center-of-mass reward: exp(-10 * sum(com pos, ref com pos diff **2))
         # com_pos = self.obs_buf[:, self.com_pos_range]
         # ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
         com_pos_diff = self.obs_buf[:, self.com_pos_diff_range]
-        com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
-        # com_reward = -1 * torch.sum(com_pos_diff ** 2, dim=-1)
+        # com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
+        com_reward = -10 * torch.sum(com_pos_diff ** 2, dim=-1)
 
         # imitation_reward = w_p * pos_reward + w_v * vel_reward + w_e * end_effector_reward + w_c * com_reward
         # instead, use multiplied reward
-        imitation_reward = pos_reward * end_effector_reward * com_reward
-        # live_reward = torch.ones_like(imitation_reward) * 0.3
+        imitation_reward = torch.exp(pos_reward + end_effector_reward + com_reward)
+        # live_reward = 0.5 * rew_scale * torch.ones_like(imitation_reward)
 
         # goal reward
         # up_reward = 0.1 * self.obs_buf[:, 17]
@@ -601,18 +601,11 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         # print the mean reward
         # print(f"mean imitation reward: {torch.mean(imitation_reward).item()}, mean goal reward: {torch.mean(goal_reward).item()}")
 
-        self.rew_buf = imitation_reward
+        self.rew_buf = imitation_reward.clone()
 
-        # reset agents (early termination)
+        # early termination
         self.reset_buf = torch.where(self.obs_buf[:, self.root_height_range].squeeze(-1) < self.termination_height, torch.ones_like(self.reset_buf), self.reset_buf)
-        
-        # # if pos reward is less than -1, reset
-        # body_pos_diff = relative_body_X_sc[:, :, 0:3] - ref_relative_body_X_sc[:, :, 0:3]
-        # self.reset_buf = torch.where(torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1) > 0.2, torch.ones_like(self.reset_buf),
-        #                                 self.reset_buf)
-        # if imitation reward is less than 0.3, reset
-        self.reset_buf = torch.where(imitation_reward < -2, torch.ones_like(self.reset_buf), self.reset_buf)
-        
+        self.reset_buf = torch.where(imitation_reward < 0.2, torch.ones_like(self.reset_buf), self.reset_buf)
         # normal termination
         self.reset_buf = torch.where(self.progress_buf > self.episode_length - 1, torch.ones_like(self.reset_buf),
                                      self.reset_buf)
@@ -639,13 +632,8 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
     def get_frame_indices(self):
         return torch.round((torch.clamp(self.progress_buf + self.offset_buf, min=0) + self.start_frame_offset) * self.dt / self.reference_frame_time).long() % self.reference_frame_count
 
-    def update_reference_model(self):
-        """
-        Update the reference model's state from the phase of the motion.
-        """
+    def check_reference_loop(self):
         frame_indices = self.get_frame_indices()
-        next_state = self.reference_model.state()
-
         # if new frame index is less than the previous frame index, it means the reference model has looped
         loop_indices = torch.nonzero(frame_indices < self.reference_frame).squeeze(-1)
         # if looped, update the offset to connect the loop
@@ -654,6 +642,16 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         diff[:, 1] = 0.0
         self.reference_pos_offset[loop_indices] += diff
         self.reference_frame = frame_indices
+
+    def update_reference_model(self):
+        """
+        Update the reference model's state from the phase of the motion.
+        """
+        frame_indices = self.get_frame_indices()
+        next_state = self.reference_model.state()
+
+        # check if the reference model has looped
+        self.check_reference_loop()
 
         # update joint_q and joint_qd
         next_state.joint_q.view(self.num_envs, -1)[:, :] = self.reference_joint_q[frame_indices, :]
@@ -691,7 +689,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] = self.reference_joint_qd[frame_index[env_ids], :]
 
         # reset position
-        self.state.joint_q.view(self.num_envs, -1)[env_ids, :3] += self.start_reference_pos_offset[env_ids]
+        self.state.joint_q.view(self.num_envs, -1)[env_ids, :3] += self.reference_pos_offset[env_ids]
 
         if perform_forward_kinematics:
             body_X_sc, body_X_sm = eval_rigid_fk_grad(self.model, self.state.joint_q)
