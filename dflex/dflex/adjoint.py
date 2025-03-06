@@ -6,7 +6,8 @@
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
 import os
-import imp
+import importlib.util
+import sys
 import ast
 import math
 import inspect
@@ -992,7 +993,7 @@ class Adjoint:
                 else:
                     raise KeyError("Referencing undefined symbol: " + str(node.id))
 
-            elif (isinstance(node, ast.Num)):
+            elif (isinstance(node, ast.Constant)):
 
                 # lookup constant, if it has already been assigned then return existing var
                 # currently disabled, since assigning constant in a branch means it 
@@ -1109,14 +1110,14 @@ class Adjoint:
 
                 indices = []
 
-                if isinstance(node.slice.value, ast.Tuple):
+                if isinstance(node.slice, ast.Tuple):
                     # handles the M[i, j] case
-                    for arg in node.slice.value.elts:
+                    for arg in node.slice.elts:
                         var = adj.eval(arg)
                         indices.append(var)
                 else:
                     # simple expression
-                    var = adj.eval(node.slice.value)
+                    var = adj.eval(node.slice)
                     indices.append(var)
 
                 out = adj.add_call(functions["index"], [target, *indices])
@@ -1670,7 +1671,7 @@ def codegen_module_decl(adj, device='cpu'):
 def set_build_env():
     if os.name == 'nt':
         # VS2019 (required for PyTorch headers)
-        vcvars_path = "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Auxiliary\Build\\vcvars64.bat"
+        vcvars_path = "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat"
 
         s = '"{}" && set'.format(vcvars_path)
         output = os.popen(s).read()
@@ -1683,13 +1684,30 @@ def set_build_env():
 
 
 def import_module(module_name, path):
-
-    # https://stackoverflow.com/questions/67631/how-to-import-a-module-given-the-full-path
-    file, path, description = imp.find_module(module_name, [path])
-
-    # Close the .so file after load.
-    with file:
-        return imp.load_module(module_name, file, path, description)
+    # Construct the full path to the module file
+    if path not in sys.path:
+        sys.path.insert(0, path)
+    
+    try:
+        # Try simple import first (works for .so files)
+        return importlib.import_module(module_name)
+    except ImportError:
+        # For more complex cases, use the spec-based import
+        # Find the module spec
+        spec = importlib.util.find_spec(module_name, [path])
+        if spec is None:
+            raise ImportError(f"Could not find module {module_name} in {path}")
+        
+        # Create a module based on the spec
+        module = importlib.util.module_from_spec(spec)
+        
+        # Add the module to sys.modules
+        sys.modules[module_name] = module
+        
+        # Execute the module
+        spec.loader.exec_module(module)
+        
+        return module
 
 
 def rename(name, return_type):

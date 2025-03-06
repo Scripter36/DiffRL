@@ -40,7 +40,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.filter = { "Pelvis", "FemurR", "TibiaR", "TalusR", "FootThumbR", "FootPinkyR", "FemurL", "TibiaL", "TalusL", "FootThumbL", "FootPinkyL"}
 
         self.skeletons = []
-        self.muscle_strengths = []
+        # self.muscle_strengths = []
 
         self.mtu_actuations = True 
 
@@ -383,8 +383,8 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                 self.start_frame_offset = 0
                 self.reference_frame[env_ids] = 0
                 self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
-                self.copy_ref_pos_to_state(env_ids, perform_forward_kinematics=True)
                 with torch.no_grad():
+                    self.copy_ref_pos_to_state(env_ids, perform_forward_kinematics=True)
                     self.update_reference_model()
                     # start pos randomization
                     # self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] += (torch.rand(
@@ -403,8 +403,8 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                 self.start_frame_offset = 0
                 self.reference_frame[env_ids] = 0
                 self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
-                self.copy_ref_pos_to_state(env_ids, perform_forward_kinematics=True)
                 with torch.no_grad():
+                    self.copy_ref_pos_to_state(env_ids, perform_forward_kinematics=True)
                     self.update_reference_model()
 
             # clear action
@@ -416,14 +416,13 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
         return self.obs_buf
 
-
     def clear_grad(self, checkpoint=None):
         """
         cut off the gradient from the current state to previous states
         """
         with torch.no_grad():
             if checkpoint is None:
-                checkpoint = {}  # NOTE: any other things to restore?
+                checkpoint = {} # NOTE: any other things to restore?
                 checkpoint['joint_q'] = self.state.joint_q.clone()
                 checkpoint['joint_qd'] = self.state.joint_qd.clone()
                 checkpoint['body_X_sc'] = self.state.body_X_sc.clone()
@@ -431,19 +430,15 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                 checkpoint['body_v_s'] = self.state.body_v_s.clone()
                 checkpoint['actions'] = self.actions.clone()
                 checkpoint['progress_buf'] = self.progress_buf.clone()
-                checkpoint['obs_buf'] = self.obs_buf.clone()
 
-            current_joint_q = checkpoint['joint_q'].clone()
-            current_joint_qd = checkpoint['joint_qd'].clone()
             self.state = self.model.state()
-            self.state.joint_q = current_joint_q
-            self.state.joint_qd = current_joint_qd
+            self.state.joint_q = checkpoint['joint_q'].clone()
+            self.state.joint_qd = checkpoint['joint_qd'].clone()
             self.state.body_X_sc = checkpoint['body_X_sc'].clone()
             self.state.body_X_sm = checkpoint['body_X_sm'].clone()
             self.state.body_v_s = checkpoint['body_v_s'].clone()
             self.actions = checkpoint['actions'].clone()
             self.progress_buf = checkpoint['progress_buf'].clone()
-            self.obs_buf = checkpoint['obs_buf'].clone()
 
     def initialize_trajectory(self):
         """
@@ -461,7 +456,6 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         checkpoint['joint_qd'] = self.state.joint_qd.clone()
         checkpoint['actions'] = self.actions.clone()
         checkpoint['progress_buf'] = self.progress_buf.clone()
-        checkpoint['obs_buf'] = self.obs_buf.clone()
 
         return checkpoint
 
@@ -554,8 +548,8 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         body_quat = body_X_sc[:, :, 3:7]
         ref_body_quat = ref_body_X_sc[:, :, 3:7]
         body_quat_diff = tu.quat_diff(body_quat, ref_body_quat)
-        # pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
-        pos_reward = -0.1 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1)
+        pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
+        # pos_reward = -0.1 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1)
 
         # velocity reward: exp(-0.1 * sum(body w, ref body w diff **2))
         # body_w_diff = body_v_s[:, :, 0:3] - ref_body_v_s[:, :, 0:3]

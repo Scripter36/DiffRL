@@ -3,6 +3,7 @@ import mlflow
 import queue
 import threading
 import json
+from datetime import datetime
 
 from dotenv import load_dotenv
 load_dotenv(override=True)  # This loads variables from .env into os.environ
@@ -28,17 +29,22 @@ def _mlflow_save_worker():
         if task is None:
             break
         checkpoint_model, filename = task
-        active_run = mlflow.active_run()
+        active_run = get_current_run()
+        # save the model
+        mlflow.pytorch.log_model(checkpoint_model, filename, run_id=active_run.info.run_id)
         # https://github.com/mlflow/mlflow/issues/10802
         # remove the existing model history, to prevent overflow (8000 char limit)
         run = mlflow.get_run(active_run.info.run_id)
         if 'mlflow.log-model.history' in run.data.tags:
             history = json.loads(run.data.tags['mlflow.log-model.history'])
-            # delete the existing one
-            history = [item for item in history if item['artifact_path'] != filename]
-            mlflow.set_tag('mlflow.log-model.history', json.dumps(history))
-        # save the model
-        mlflow.pytorch.log_model(checkpoint_model, filename, run_id=active_run.info.run_id)
+            # delete the item with same artifact_path, while remaining the latest one
+            same_model_history = [item for item in history if item['artifact_path'] == filename]
+            other_history = [item for item in history if item['artifact_path'] != filename]
+            if len(same_model_history) > 1:
+                same_model_history.sort(key=lambda x: datetime.strptime(x['utc_time_created'], '%Y-%m-%d %H:%M:%S.%f'), reverse=True)
+                same_model_history = same_model_history[:1]
+            history = same_model_history + other_history
+            get_mlflow_client().set_tag(run.info.run_id, 'mlflow.log-model.history', json.dumps(history), True)
         _save_queue.task_done()
 
 def start_save_worker():
@@ -64,6 +70,15 @@ def get_mlflow_client():
     if _mlflow_client is None:
         _mlflow_client = mlflow.MlflowClient()
     return _mlflow_client
+
+_current_run = None
+def get_current_run() -> 'mlflow.ActiveRun':
+    global _current_run
+    return _current_run
+
+def set_current_run(run):
+    global _current_run
+    _current_run = run
 
 def flatten_dict(d, parent_key='', sep='.'):
     """
