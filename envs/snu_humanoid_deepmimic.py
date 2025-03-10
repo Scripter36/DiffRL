@@ -554,8 +554,8 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         body_quat = body_X_sc[:, :, 3:7]
         ref_body_quat = ref_body_X_sc[:, :, 3:7]
         body_quat_diff = tu.quat_diff(body_quat, ref_body_quat)
-        # pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
-        pos_reward = -0.1 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1)
+        pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
+        # pos_reward = -0.1 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1)
 
         # velocity reward: exp(-0.1 * sum(body w, ref body w diff **2))
         # body_w_diff = body_v_s[:, :, 0:3] - ref_body_v_s[:, :, 0:3]
@@ -617,7 +617,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         # self.reset_buf = torch.where(torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1) > 0.2, torch.ones_like(self.reset_buf),
         #                                 self.reset_buf)
         # if imitation reward is less than 0.3, reset
-        self.reset_buf = torch.where(imitation_reward < -2, torch.ones_like(self.reset_buf), self.reset_buf)
+        self.reset_buf = torch.where(imitation_reward < 0.1, torch.ones_like(self.reset_buf), self.reset_buf)
         
         # normal termination
         self.reset_buf = torch.where(self.progress_buf > self.episode_length - 1, torch.ones_like(self.reset_buf),
