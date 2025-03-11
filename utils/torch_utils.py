@@ -165,6 +165,43 @@ def quat_theta(q):
 def quat_diff(q1, q2):
     return quat_theta(quat_mul(q2, quat_conjugate(q1)))
 
+# @torch.jit.script
+# def quat_theta_modified(q):
+#     """
+#     q: (..., 4)
+#     return: (..., 1)
+#     """
+#     shape = q.shape
+#     q = q.reshape(-1, 4)
+#     return (1 - torch.sum(q[:, :] ** 2, dim=-1)).view(shape[:-1]).unsqueeze(-1)
+
+@torch.jit.script
+def quat_diff_approx(q1, q2):
+    """
+    q1: (..., 4)
+    q2: (..., 4)
+    return: (..., 1)
+    """
+    shape = q1.shape
+    q1 = q1.reshape(-1, 4)
+    q2 = q2.reshape(-1, 4)
+    return (1 - torch.sum((q1 * q2) ** 2, dim=-1)).view(shape[:-1]).unsqueeze(-1)
+
+@torch.jit.script
+def quat_diff_chordal(q1, q2):
+    """
+    q1: (..., 4)
+    q2: (..., 4)
+    return: (..., 1)
+    """
+    shape = q1.shape
+    q1 = q1.reshape(-1, 4)
+    q2 = q2.reshape(-1, 4)
+    # chordal distance: ||R1 - R2||_F
+    R1 = quat_to_matrix(q1)
+    R2 = quat_to_matrix(q2)
+    return torch.sum(torch.sum((R1 - R2) ** 2, dim=-1), dim=-1).view(shape[:-1]).unsqueeze(-1) / 4.0
+
 @torch.jit.script
 def angular_velocity(q1, q2):
     """

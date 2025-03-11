@@ -553,9 +553,14 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         # pos reward: exp(-2 * sum(body quat, ref body quat diff **2))
         body_quat = body_X_sc[:, :, 3:7]
         ref_body_quat = ref_body_X_sc[:, :, 3:7]
-        body_quat_diff = tu.quat_diff(body_quat, ref_body_quat)
-        pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
-        # pos_reward = -0.1 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1)
+        body_quat_diff = tu.quat_diff_chordal(body_quat, ref_body_quat)
+        # pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
+        rot_reward = -2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1)
+        
+        body_pos = body_X_sc[:, :, 0:3]
+        ref_body_pos = ref_body_X_sc[:, :, 0:3]
+        body_pos_diff = body_pos - ref_body_pos
+        pos_reward = -1.5 * torch.sum(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1)
 
         # velocity reward: exp(-0.1 * sum(body w, ref body w diff **2))
         # body_w_diff = body_v_s[:, :, 0:3] - ref_body_v_s[:, :, 0:3]
@@ -566,19 +571,19 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         end_effector_pos = body_X_sc[:, self.end_effector_indices, 0:3]
         ref_end_effector_pos = ref_body_X_sc[:, self.end_effector_indices, 0:3]
         end_effector_pos_diff = end_effector_pos - ref_end_effector_pos
-        end_effector_reward = torch.exp(-5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
-        # end_effector_reward = -0.2 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1)
+        # end_effector_reward = torch.exp(-5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
+        end_effector_reward = -5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1)
 
         # center-of-mass reward: exp(-10 * sum(com pos, ref com pos diff **2))
         # com_pos = self.obs_buf[:, self.com_pos_range]
         # ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
         com_pos_diff = self.obs_buf[:, self.com_pos_diff_range]
-        com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
-        # com_reward = -1 * torch.sum(com_pos_diff ** 2, dim=-1)
+        # com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
+        com_reward = -10 * torch.sum(com_pos_diff ** 2, dim=-1)
 
         # imitation_reward = w_p * pos_reward + w_v * vel_reward + w_e * end_effector_reward + w_c * com_reward
         # instead, use multiplied reward
-        imitation_reward = pos_reward * end_effector_reward * com_reward
+        imitation_reward = rot_reward + end_effector_reward + com_reward + 1.0
         # live_reward = torch.ones_like(imitation_reward) * 0.3
 
         # goal reward
@@ -617,7 +622,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         # self.reset_buf = torch.where(torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1) > 0.2, torch.ones_like(self.reset_buf),
         #                                 self.reset_buf)
         # if imitation reward is less than 0.3, reset
-        self.reset_buf = torch.where(imitation_reward < 0.1, torch.ones_like(self.reset_buf), self.reset_buf)
+        self.reset_buf = torch.where(imitation_reward < -1.3, torch.ones_like(self.reset_buf), self.reset_buf)
         
         # normal termination
         self.reset_buf = torch.where(self.progress_buf > self.episode_length - 1, torch.ones_like(self.reset_buf),
