@@ -571,6 +571,9 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         end_effector_pos = body_X_sc[:, self.end_effector_indices, 0:3]
         ref_end_effector_pos = ref_body_X_sc[:, self.end_effector_indices, 0:3]
         end_effector_pos_diff = end_effector_pos - ref_end_effector_pos
+        # strong penalty for xz-plane diff
+        end_effector_pos_diff[:, :, 0] *= 2.5
+        end_effector_pos_diff[:, :, 2] *= 2.5
         # end_effector_reward = torch.exp(-5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
         end_effector_reward = -5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1)
 
@@ -578,6 +581,9 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         # com_pos = self.obs_buf[:, self.com_pos_range]
         # ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
         com_pos_diff = self.obs_buf[:, self.com_pos_diff_range]
+        # strong penalty for xz-plane diff
+        com_pos_diff[:, 0] *= 2.5
+        com_pos_diff[:, 2] *= 2.5
         # com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
         com_reward = -10 * torch.sum(com_pos_diff ** 2, dim=-1)
 
