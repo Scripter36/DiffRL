@@ -37,7 +37,7 @@ def _mlflow_save_worker():
         run = mlflow.get_run(active_run.info.run_id)
         if 'mlflow.log-model.history' in run.data.tags:
             history = json.loads(run.data.tags['mlflow.log-model.history'])
-            # delete the item with same artifact_path, while remaining the latest one
+             # delete the item with same artifact_path, while remaining the latest one
             same_model_history = [item for item in history if item['artifact_path'] == filename]
             other_history = [item for item in history if item['artifact_path'] != filename]
             if len(same_model_history) > 1:
@@ -52,6 +52,15 @@ def start_save_worker():
     if _save_worker_thread is None or not _save_worker_thread.is_alive():
         _save_worker_thread = threading.Thread(target=_mlflow_save_worker, daemon=True)
         _save_worker_thread.start()
+
+_current_run = None
+def get_current_run() -> 'mlflow.ActiveRun':
+    global _current_run
+    return _current_run
+
+def set_current_run(run):
+    global _current_run
+    _current_run = run
 
 def enqueue_model_save(checkpoint_model, filename):
     # Ensure the save worker thread is running.
@@ -70,15 +79,6 @@ def get_mlflow_client():
     if _mlflow_client is None:
         _mlflow_client = mlflow.MlflowClient()
     return _mlflow_client
-
-_current_run = None
-def get_current_run() -> 'mlflow.ActiveRun':
-    global _current_run
-    return _current_run
-
-def set_current_run(run):
-    global _current_run
-    _current_run = run
 
 def flatten_dict(d, parent_key='', sep='.'):
     """

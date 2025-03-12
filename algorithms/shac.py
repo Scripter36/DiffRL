@@ -21,7 +21,7 @@ from tensorboardX import SummaryWriter
 import yaml
 import mlflow
 from mlflow.entities import Metric
-from utils.mlflow_utils import enqueue_model_save, get_mlflow_client, stop_save_worker
+from utils.mlflow_utils import enqueue_model_save, get_current_run, get_mlflow_client, stop_save_worker
 import dflex as df
 
 import envs

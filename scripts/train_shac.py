@@ -143,7 +143,6 @@ if __name__ == '__main__':
         mlflow.end_run()
         with mlflow.start_run() as run:
             set_current_run(run)
-            print(f'start run {run.info.run_name} ({run.info.run_id})')
             mlflow.log_params(flatten_dict(cfg_train))
             # also store original cfg_train for reproducibility
             mlflow.log_dict(cfg_train, "cfg_train.json")
