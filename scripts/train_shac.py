@@ -22,7 +22,7 @@ import sys
 import yaml
 import torch
 import mlflow
-from utils.mlflow_utils import flatten_dict, set_experiment_name_from_env, unflatten_dict
+from utils.mlflow_utils import flatten_dict, set_current_run, set_experiment_name_from_env, unflatten_dict
 
 import numpy as np
 import copy
@@ -141,7 +141,8 @@ if __name__ == '__main__':
         set_experiment_name_from_env(cfg_train["params"]["config"].get("name", "default_experiment"))
 
         mlflow.end_run()
-        with mlflow.start_run():
+        with mlflow.start_run() as run:
+            set_current_run(run)
             mlflow.log_params(flatten_dict(cfg_train))
             # also store original cfg_train for reproducibility
             mlflow.log_dict(cfg_train, "cfg_train.json")

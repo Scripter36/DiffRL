@@ -21,7 +21,7 @@ from tensorboardX import SummaryWriter
 import yaml
 import mlflow
 from mlflow.entities import Metric
-from utils.mlflow_utils import enqueue_model_save, get_mlflow_client, stop_save_worker
+from utils.mlflow_utils import enqueue_model_save, get_current_run, get_mlflow_client, stop_save_worker
 import dflex as df
 
 import envs
@@ -69,7 +69,7 @@ class SHAC:
             save_rng_state()
         if render_name is None:
             # use experiment name
-            render_name = mlflow.get_experiment(mlflow.active_run().info.experiment_id).name
+            render_name = mlflow.get_experiment(get_current_run().info.experiment_id).name
         env_fn = getattr(envs, cfg["params"]["diff_env"]["name"])
         self.env = env_fn(num_envs = cfg["params"]["config"]["num_actors"], \
                             device = cfg["params"]["general"]["device"], \
@@ -653,7 +653,7 @@ class SHAC:
                 all_metrics.append(Metric(key="episode_lengths_iter", value=mean_episode_length, step=self.iter_count, timestamp=timestamp_now))
                 all_metrics.append(Metric(key="grad_norm_before_clip_iter", value=self.grad_norm_before_clip, step=self.iter_count, timestamp=timestamp_now))
 
-            get_mlflow_client().log_batch(mlflow.active_run().info.run_id, all_metrics)
+            get_mlflow_client().log_batch(get_current_run().info.run_id, all_metrics)
             # ---- End MLFlow logging ----
 
             if self.save_interval > 0 and (self.iter_count % self.save_interval == 0):
