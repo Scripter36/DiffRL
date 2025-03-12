@@ -29,12 +29,12 @@ from utils import torch_utils as tu
 
 class SNUHumanoidEnv(DFlexEnv):
 
-    def __init__(self, render=False, device='cuda:0', num_envs=4096, seed=0, episode_length=1000, no_grad=True, stochastic_init=False, MM_caching_frequency = 1):
+    def __init__(self, render=False, device='cuda:0', num_envs=4096, seed=0, episode_length=1000, no_grad=True, stochastic_init=False, MM_caching_frequency = 1, render_name=None):
 
         self.filter = { "Pelvis", "FemurR", "TibiaR", "TalusR", "FootThumbR", "FootPinkyR", "FemurL", "TibiaL", "TalusL", "FootThumbL", "FootPinkyL"}
 
         self.skeletons = []
-        self.muscle_strengths = []
+        # self.muscle_strengths = []
 
         self.mtu_actuations = True 
 
@@ -170,13 +170,13 @@ class SNUHumanoidEnv(DFlexEnv):
         self.start_joint_q = self.builder.joint_q[7:num_q].copy()
         self.start_joint_target = self.start_joint_q.copy()
         
-        for m in self.skeletons[0].muscles:
-            self.muscle_strengths.append(self.str_scale * m.muscle_strength)
+        # for m in self.skeletons[0].muscles:
+        #     self.muscle_strengths.append(self.str_scale * m.muscle_strength)
 
-        for mi in range(len(self.muscle_strengths)):
-            self.muscle_strengths[mi] = self.str_scale * self.muscle_strengths[mi]
+        # for mi in range(len(self.muscle_strengths)):
+        #     self.muscle_strengths[mi] = self.str_scale * self.muscle_strengths[mi]
 
-        self.muscle_strengths = tu.to_torch(self.muscle_strengths, device=self.device).repeat(self.num_envs)
+        # self.muscle_strengths = tu.to_torch(self.muscle_strengths, device=self.device).repeat(self.num_envs)
     
         self.start_pos = tu.to_torch(self.start_pos, device=self.device)
         self.start_joint_q = tu.to_torch(self.start_joint_q, device=self.device)
@@ -228,7 +228,7 @@ class SNUHumanoidEnv(DFlexEnv):
 
                             points.append(Gf.Vec3f(df.transform_point(X_sc, point).tolist()))
                         
-                        self.renderer.add_line_strip(points, name=s.muscles[m].name + str(skel_index), radius=0.0075, color=(self.model.muscle_activation[muscle_start + m]/self.muscle_strengths[m], 0.2, 0.5), time=self.render_time)
+                        self.renderer.add_line_strip(points, name=s.muscles[m].name + str(skel_index), radius=0.0075, color=(self.model.muscle_activation[muscle_start + m], 0.2, 0.5), time=self.render_time)
                     
                     muscle_start += len(s.muscles)
                     skel_index += 1
@@ -268,7 +268,7 @@ class SNUHumanoidEnv(DFlexEnv):
 
         for ci in range(self.inv_control_freq):
             if self.mtu_actuations:
-                self.model.muscle_activation = actions.view(-1) * self.muscle_strengths
+                self.model.muscle_activation = actions.view(-1)
             else:
                 self.state.joint_act.view(self.num_envs, -1)[:, 6:] = actions * self.action_strength
                 
@@ -312,8 +312,8 @@ class SNUHumanoidEnv(DFlexEnv):
 
             # fixed start state
             self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] = self.start_pos[env_ids, :].clone()
-            self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = self.start_rotation.clone()
-            self.state.joint_q.view(self.num_envs, -1)[env_ids, 7:] = self.start_joint_q.clone()
+            self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = self.start_rotation.clone().unsqueeze(0).repeat(len(env_ids), 1)
+            self.state.joint_q.view(self.num_envs, -1)[env_ids, 7:] = self.start_joint_q.clone().unsqueeze(0).repeat(len(env_ids), 1)
             self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] = 0.
 
             # randomization

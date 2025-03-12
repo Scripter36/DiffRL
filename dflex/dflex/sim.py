@@ -1294,36 +1294,23 @@ def cache_muscle_length(
 
     l_mt = 0.0
     m_len = m_end - m_start
-    if m_len == 0:
-        l_mt = 0.0
-    if m_len == 1:
+
+    if m_len > 0:
         l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s)
-    if m_len == 2:
-        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s)
-    if m_len == 3:
-        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s)
-    if m_len == 4:
-        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s)
-    if m_len == 5:
-        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 4, muscle_links, muscle_points, body_X_s)
-    if m_len == 6:
-        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 4, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 5, muscle_links, muscle_points, body_X_s)
-    if m_len == 7:
-        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 4, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 5, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 6, muscle_links, muscle_points, body_X_s)
-    if m_len == 8:
-        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 4, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 5, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 6, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 7, muscle_links, muscle_points, body_X_s)
+    if m_len > 1:
+        l_mt = l_mt + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s)
+    if m_len > 2:
+        l_mt = l_mt + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s)
+    if m_len > 3:
+        l_mt = l_mt + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s)
+    if m_len > 4:
+        l_mt = l_mt + compute_muscle_length(m_start + 4, muscle_links, muscle_points, body_X_s)
+    if m_len > 5:
+        l_mt = l_mt + compute_muscle_length(m_start + 5, muscle_links, muscle_points, body_X_s)
+    if m_len > 6:
+        l_mt = l_mt + compute_muscle_length(m_start + 6, muscle_links, muscle_points, body_X_s)
+    if m_len > 7:
+        l_mt = l_mt + compute_muscle_length(m_start + 7, muscle_links, muscle_points, body_X_s)
     if m_len > 8:
         print(0-123)
 
@@ -1378,39 +1365,24 @@ def eval_muscles(
     # quick and dirty solution: make if statement for up to 8 segments
     # even dflex does not support else statements
     m_len = m_end - m_start
-    if m_len == 0:
-        l_mt = 0.0
-    if m_len == 1:
+    if m_len > 0:
         l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s)
-    if m_len == 2:
-        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s)
-    if m_len == 3:
-        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s)
-    if m_len == 4:
-        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s)
-    if m_len == 5:
-        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 4, muscle_links, muscle_points, body_X_s)
-    if m_len == 6:
-        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 4, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 5, muscle_links, muscle_points, body_X_s)
-    if m_len == 7:
-        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 4, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 5, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 6, muscle_links, muscle_points, body_X_s)
-    if m_len == 8:
-        l_mt = compute_muscle_length(m_start, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 4, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 5, muscle_links, muscle_points, body_X_s) \
-              + compute_muscle_length(m_start + 6, muscle_links, muscle_points, body_X_s) + compute_muscle_length(m_start + 7, muscle_links, muscle_points, body_X_s)
+    if m_len > 1:
+        l_mt = l_mt + compute_muscle_length(m_start + 1, muscle_links, muscle_points, body_X_s)
+    if m_len > 2:
+        l_mt = l_mt + compute_muscle_length(m_start + 2, muscle_links, muscle_points, body_X_s)
+    if m_len > 3:
+        l_mt = l_mt + compute_muscle_length(m_start + 3, muscle_links, muscle_points, body_X_s)
+    if m_len > 4:
+        l_mt = l_mt + compute_muscle_length(m_start + 4, muscle_links, muscle_points, body_X_s)
+    if m_len > 5:
+        l_mt = l_mt + compute_muscle_length(m_start + 5, muscle_links, muscle_points, body_X_s)
+    if m_len > 6:
+        l_mt = l_mt + compute_muscle_length(m_start + 6, muscle_links, muscle_points, body_X_s)
+    if m_len > 7:
+        l_mt = l_mt + compute_muscle_length(m_start + 7, muscle_links, muscle_points, body_X_s)
     if m_len > 8:
         print(0-123)
-
 
     # 2. calculate normalized muscle length
     l_m = (l_mt / l_mt0) - l_t0

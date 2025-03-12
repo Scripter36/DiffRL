@@ -22,7 +22,7 @@ import sys
 import yaml
 import torch
 import mlflow
-from utils.mlflow_utils import flatten_dict, set_experiment_name_from_env, unflatten_dict
+from utils.mlflow_utils import flatten_dict, set_current_run, set_experiment_name_from_env, unflatten_dict
 
 import numpy as np
 import copy
@@ -111,10 +111,12 @@ if __name__ == '__main__':
         with open(args.cfg, 'r') as f:
             cfg_train = yaml.load(f, Loader=yaml.SafeLoader)
 
-    # override the parameters with the command line arguments
-    cfg_train["params"]["general"] = {}
+    # override the parameters with the command line arguments, but keep the seed
+    cfg_train["params"]["general"] = {
+        "seed": cfg_train["params"].get("general", {}).get("seed", random.randint(0, 1000000))
+    }
     for key in vargs.keys():
-        if vargs[key] is not None: 
+        if vargs[key] is not None:
             cfg_train["params"]["general"][key] = vargs[key]
         else:
             cfg_train["params"]["general"][key] = cfg_train["params"]["general"].get(key, None)
@@ -123,9 +125,11 @@ if __name__ == '__main__':
     if cfg_train["params"]["general"]["seed"] is None:
         cfg_train["params"]["general"]["seed"] = random.randint(0, 1000000)
 
-    # for playing, set the number of actors to 1 default
+    # for playing, set the number of actors to 1 default and use deterministic env
     if args.play or args.test:  
         cfg_train["params"]["config"]["num_actors"] = cfg_train["params"]["config"].get("player", {}).get("num_actors", 1)
+        cfg_train["params"]["diff_env"]["stochastic_env"] = False
+        cfg_train["params"]["config"]["player"]["determenistic"] = True
 
     if not args.no_time_stamp:
         args.logdir = os.path.join(args.logdir, get_time_stamp())
@@ -137,7 +141,8 @@ if __name__ == '__main__':
         set_experiment_name_from_env(cfg_train["params"]["config"].get("name", "default_experiment"))
 
         mlflow.end_run()
-        with mlflow.start_run():
+        with mlflow.start_run() as run:
+            set_current_run(run)
             mlflow.log_params(flatten_dict(cfg_train))
             # also store original cfg_train for reproducibility
             mlflow.log_dict(cfg_train, "cfg_train.json")

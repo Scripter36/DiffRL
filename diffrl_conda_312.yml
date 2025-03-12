@@ -1,0 +1,22 @@
+name: diffrl
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+    - torch==2.6.0
+    - torchvision==0.21.0
+    - pyyaml==6.0.2
+    - tensorboard==2.19.0
+    - tensorboardx==2.6.2.2
+    - mlflow==2.20.3
+    - python-dotenv==1.0.1
+    - usd-core==25.2.post1
+    - protobuf==5.29.3
+    - numpy==2.2.3
+    - setuptools==75.8.2
+    - tqdm==4.67.1
+    - -e externals/rl_games
+    - -e dflex

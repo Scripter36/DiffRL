@@ -21,7 +21,7 @@ from tensorboardX import SummaryWriter
 import yaml
 import mlflow
 from mlflow.entities import Metric
-from utils.mlflow_utils import enqueue_model_save, get_mlflow_client, stop_save_worker
+from utils.mlflow_utils import enqueue_model_save, get_current_run, get_mlflow_client, stop_save_worker
 import dflex as df
 
 import envs
@@ -33,6 +33,7 @@ from utils.running_mean_std import RunningMeanStd
 from utils.dataset import CriticDataset
 from utils.time_report import TimeReport
 from utils.average_meter import AverageMeter
+from utils.mlflow_utils import get_current_run
 
 import torch.nn as nn
 
@@ -62,18 +63,21 @@ class SHAC:
     def __init__(self, cfg, render_name=None):
         self.cfg = cfg
         seed = cfg["params"]["general"]["seed"]
+        stochastic_init = cfg["params"]["diff_env"].get("stochastic_env", True)
+
         if seed is not None:
             seeding(seed)
+            save_rng_state()
         if render_name is None:
             # use experiment name
-            render_name = mlflow.get_experiment(mlflow.active_run().info.experiment_id).name
+            render_name = mlflow.get_experiment(get_current_run().info.experiment_id).name
         env_fn = getattr(envs, cfg["params"]["diff_env"]["name"])
         self.env = env_fn(num_envs = cfg["params"]["config"]["num_actors"], \
                             device = cfg["params"]["general"]["device"], \
                             render = cfg["params"]["general"]["render"], \
                             seed = seed, \
                             episode_length=cfg["params"]["diff_env"].get("episode_length", 250), \
-                            stochastic_init = cfg["params"]["diff_env"].get("stochastic_env", True), \
+                            stochastic_init = stochastic_init, \
                             MM_caching_frequency = cfg["params"]['diff_env'].get('MM_caching_frequency', 1), \
                             no_grad = False, \
                             render_name = render_name)
@@ -140,8 +144,11 @@ class SHAC:
             # stochastic inference
             self.stochastic_evaluation = True
         else:
-            self.stochastic_evaluation = not (cfg['params']['config']['player'].get('determenistic', False) or cfg['params']['config']['player'].get('deterministic', False))
+            user_wants_deterministic = cfg['params']['config']['player'].get('deterministic', False) or cfg['params']['config']['player'].get('determenistic', False)
+            self.stochastic_evaluation = not user_wants_deterministic
             self.steps_num = self.env.episode_length
+        
+        set_torch_deterministic(self.stochastic_evaluation)
 
         # create actor critic network
         self.actor_name = cfg["params"]["network"].get("actor", 'ActorStochasticMLP') # choices: ['ActorDeterministicMLP', 'ActorStochasticMLP']
@@ -352,6 +359,9 @@ class SHAC:
     
     @torch.no_grad()
     def evaluate_policy(self, num_games, deterministic = False):
+        if deterministic:
+            restore_rng_state()
+
         episode_length_his = []
         episode_loss_his = []
         episode_discounted_loss_his = []
@@ -370,7 +380,7 @@ class SHAC:
                 if self.obs_rms is not None:
                     obs = self.obs_rms.normalize(obs)
 
-                actions = self.actor(obs, deterministic = deterministic)
+                actions = self.actor(obs, deterministic=deterministic)
 
                 obs, rew, done, _ = self.env.step(torch.tanh(actions))
 
@@ -401,10 +411,6 @@ class SHAC:
                 env_bars[done_env_id].close()
                 env_bars[done_env_id] = tqdm(total=self.env.episode_length, desc='Evaluating policy', position=done_env_id+1)
         game_bar.close()
-
-        # if env has 'finalize_play' method, call it
-        if hasattr(self.env, 'finalize_play'):
-            self.env.finalize_play()
         
         mean_episode_length = np.mean(np.array(episode_length_his))
         mean_policy_loss = np.mean(np.array(episode_loss_his))
@@ -648,7 +654,7 @@ class SHAC:
                 all_metrics.append(Metric(key="episode_lengths_iter", value=mean_episode_length, step=self.iter_count, timestamp=timestamp_now))
                 all_metrics.append(Metric(key="grad_norm_before_clip_iter", value=self.grad_norm_before_clip, step=self.iter_count, timestamp=timestamp_now))
 
-            get_mlflow_client().log_batch(mlflow.active_run().info.run_id, all_metrics)
+            get_mlflow_client().log_batch(get_current_run().info.run_id, all_metrics)
             # ---- End MLFlow logging ----
 
             if self.save_interval > 0 and (self.iter_count % self.save_interval == 0):
