@@ -126,6 +126,7 @@ class SHAC:
         self.use_grad_penalize = cfg["params"]["config"].get('use_grad_penalize', False)
         self.grad_penalize_alpha = cfg["params"]["config"].get('grad_penalize_alpha', 0.8)
         self.grad_penalize_r = cfg["params"]["config"].get('grad_penalize_r', 0.05)
+        self.grad_penalize_coeff = cfg["params"]["config"].get('grad_penalize_coeff', 0.04)
 
         if cfg['params']['general']['train']:
             self.log_dir = cfg["params"]["general"]["logdir"]
@@ -504,47 +505,56 @@ class SHAC:
             actor_loss = self.compute_actor_loss()
             self.time_report.end_timer("forward simulation")
 
-
             self.time_report.start_timer("backward simulation")
             self.valid_env_mask = None
-            actor_loss.backward()
-            self.time_report.end_timer("backward simulation")
+            grads = torch.autograd.grad(actor_loss, self.actor.parameters(), create_graph=True)
 
-            # to penalize gradient, first we obtain all gradients
-            grads = [p.grad for p in self.actor.parameters()]
-            grad_norm = tu.grad_norm(self.actor.parameters())
+            # concatenate all gradients
+            concatenated_grads = torch.cat([g.view(-1) for g in grads])
             # normalize the gradient
-            normalized_grads = [g / grad_norm for g in grads]
+            normalized_grads = concatenated_grads / (torch.norm(concatenated_grads) + 1e-6)
 
-            # save current parameters
-            params = [p.data.clone() for p in self.actor.parameters()]
-
-            # update the parameter (+ r * grad)
-            for p, g in zip(self.actor.parameters(), normalized_grads):
-                p.data.add_(self.grad_penalize_r * g)
-
-            # calculate the actor loss again
-            # restore the environment to the checkpoint
-            self.env.clear_grad(env_checkpoint)
-
-            self.time_report.start_timer("forward simulation")
-            actor_loss_2 = self.compute_actor_loss()
-            self.time_report.end_timer("forward simulation")
-
-            self.time_report.start_timer("backward simulation")
-            actor_loss_2.backward()
+            # calculate hessian x normalized_grads
+            hessian_dot_normalized_grads = torch.autograd.grad(concatenated_grads, self.actor.parameters(), normalized_grads)
             self.time_report.end_timer("backward simulation")
 
-            # obtain all gradients
-            grads_2 = [p.grad for p in self.actor.parameters()]
+            # update the gradient
+            for p, c_g, h_dot_n_g in zip(self.actor.parameters(), grads, hessian_dot_normalized_grads):
+                p.grad = c_g + self.grad_penalize_coeff * h_dot_n_g
 
-            # final gradient: (1 - alpha) * grad + alpha * grad_2
-            for p, g, g_2 in zip(self.actor.parameters(), grads, grads_2):
-                p.grad = (1 - self.grad_penalize_alpha) * g + self.grad_penalize_alpha * g_2
+            # grad_norm = tu.grad_norm(self.actor.parameters())
+            # # normalize the gradient
+            # normalized_grads = [g / grad_norm for g in grads]
 
-            # restore parameters
-            for p, param in zip(self.actor.parameters(), params):
-                p.data.copy_(param)
+            # # save current parameters
+            # params = [p.data.clone() for p in self.actor.parameters()]
+
+            # # update the parameter (+ r * grad)
+            # for p, g in zip(self.actor.parameters(), normalized_grads):
+            #     p.data.add_(self.grad_penalize_r * g)
+
+            # # calculate the actor loss again
+            # # restore the environment to the checkpoint
+            # self.env.clear_grad(env_checkpoint)
+
+            # self.time_report.start_timer("forward simulation")
+            # actor_loss_2 = self.compute_actor_loss()
+            # self.time_report.end_timer("forward simulation")
+
+            # self.time_report.start_timer("backward simulation")
+            # actor_loss_2.backward()
+            # self.time_report.end_timer("backward simulation")
+
+            # # obtain all gradients
+            # grads_2 = [p.grad for p in self.actor.parameters()]
+
+            # # final gradient: (1 - alpha) * grad + alpha * grad_2
+            # for p, g, g_2 in zip(self.actor.parameters(), grads, grads_2):
+            #     p.grad = (1 - self.grad_penalize_alpha) * g + self.grad_penalize_alpha * g_2
+
+            # # restore parameters
+            # for p, param in zip(self.actor.parameters(), params):
+            #     p.data.copy_(param)
 
             with torch.no_grad():
                 self.grad_norm_before_clip = tu.grad_norm(self.actor.parameters())
