@@ -140,6 +140,26 @@ def quat_to_matrix(q):
     return rot
 
 @torch.jit.script
+def quat_to_ortho6d(q):
+    """
+    q: (..., 4)
+    return: (..., 6)
+    """
+    shape = q.shape
+    q = q.reshape(-1, 4)
+    x, y, z, w = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+
+    x2, y2, z2 = x * x, y * y, z * z
+    wx, wy, wz = w * x, w * y, w * z
+    xy, yz, xz = x * y, y * z, x * z
+
+    return torch.stack([
+        1 - 2 * (y2 + z2), 2 * (xy - wz),
+        2 * (xy + wz), 1 - 2 * (x2 + z2),
+        2 * (xz - wy), 2 * (yz + wx),
+    ], dim=-1).view(shape[:-1] + (6,))
+
+@torch.jit.script
 def normalize_angle(theta):
     """
     map [0, 2pi] to [-pi, pi]
@@ -201,6 +221,18 @@ def quat_diff_chordal(q1, q2):
     R1 = quat_to_matrix(q1)
     R2 = quat_to_matrix(q2)
     return torch.sum(torch.sum((R1 - R2) ** 2, dim=-1), dim=-1).view(shape[:-1]).unsqueeze(-1) / 4.0
+
+@torch.jit.script
+def ortho6d_diff(o1, o2):
+    """
+    o1: (..., 6)
+    o2: (..., 6)
+    return: (..., 1)
+    """
+    shape = o1.shape
+    o1 = o1.reshape(-1, 6)
+    o2 = o2.reshape(-1, 6)
+    return torch.sum((o1 - o2) ** 2, dim=-1).view(shape[:-1]).unsqueeze(-1) / 3.0
 
 @torch.jit.script
 def angular_velocity(q1, q2):

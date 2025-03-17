@@ -595,32 +595,38 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         up_vec = tu.quat_rotate(root_rot, self.basis_vec1)
         heading_vec = tu.quat_rotate(root_rot, self.basis_vec0)
 
+        root_rot_ortho6d = tu.quat_to_ortho6d(root_rot)
+        body_X_sc_local_translate = body_X_sc_local[:, :, 0:3].view(-1, 3)
+        body_X_sc_local_rotate = body_X_sc_local[:, :, 3:7].view(-1, 4)
+        body_X_sc_local_ortho6d = tu.quat_to_ortho6d(body_X_sc_local_rotate)
+        body_X_sc_local_ortho6d_translate = torch.cat([body_X_sc_local_translate, body_X_sc_local_ortho6d], dim=-1)
+
         # TODO: check if we can add phase (which is not differentiable) in observations
         self.obs_buf = torch.cat([
             root_pos[:, 1:2].view(self.num_envs, -1), # 0:1
-            root_rot.view(self.num_envs, -1), # 1:5
-            com_pos_local.view(self.num_envs, -1), # 5:8
-            lin_vel.view(self.num_envs, -1), # 8:11
-            ang_vel.view(self.num_envs, -1), # 11:14
-            up_vec[:, 1:2],  # 14:15
-            (heading_vec * target_dirs).sum(dim=-1).unsqueeze(-1), # 15:16
-            com_pos_diff.view(self.num_envs, -1), # 16:19
-            body_X_sc_local.view(self.num_envs, -1), # 19:96
-            self.joint_vel_obs_scaling * self.state.body_v_s.view(self.num_envs, -1), # 96:162
-            phase.view(self.num_envs, 1), # 162
+            root_rot_ortho6d.view(self.num_envs, -1), # 1:7
+            com_pos_local.view(self.num_envs, -1), # 7:10
+            lin_vel.view(self.num_envs, -1), # 10:13
+            ang_vel.view(self.num_envs, -1), # 13:16
+            up_vec[:, 1:2],  # 16:17
+            (heading_vec * target_dirs).sum(dim=-1).unsqueeze(-1), # 17:18
+            com_pos_diff.view(self.num_envs, -1), # 18:21
+            body_X_sc_local_ortho6d_translate.view(self.num_envs, -1), # 21:120
+            self.joint_vel_obs_scaling * self.state.body_v_s.view(self.num_envs, -1), # 120:186
+            phase.view(self.num_envs, 1), # 186:187
         ], dim=-1)
 
     root_height_range = range(0, 1)
-    root_rot_range = range(1, 5)
-    com_pos_range = range(5, 8)
-    lin_vel_range = range(8, 11)
-    ang_vel_range = range(11, 14)
-    up_vec_range = range(14, 15)
-    heading_vec_range = range(15, 16)
-    com_pos_diff_range = range(16, 19)
-    body_X_sc_local_range = range(19, 96)
-    joint_vel_range = range(96, 162)
-    phase_range = range(162, 163)
+    root_rot_range = range(1, 7)
+    com_pos_range = range(7, 10)
+    lin_vel_range = range(10, 13)
+    ang_vel_range = range(13, 16)
+    up_vec_range = range(16, 17)
+    heading_vec_range = range(17, 18)
+    com_pos_diff_range = range(18, 21)
+    body_X_sc_local_range = range(21, 120)
+    joint_vel_range = range(120, 186)
+    phase_range = range(186, 187)
 
     def calculateReward(self):
         # DeepMimic reward: pose reward + velocity reward + end-effector reward + center-of-mass reward
@@ -636,11 +642,11 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         ref_body_v_s = self.reference_state.body_v_s.view(self.num_envs, -1, 6)
 
         # pos reward: exp(-2 * sum(body quat, ref body quat diff **2))
-        body_quat = body_X_sc[:, :, 3:7]
-        ref_body_quat = ref_body_X_sc[:, :, 3:7]
-        body_quat_diff = tu.quat_diff_chordal(body_quat, ref_body_quat)
+        body_ortho6d = self.obs_buf[:, self.body_X_sc_local_range].view(self.num_envs, -1, 9)[:, :, 3:9]
+        ref_body_ortho6d = tu.quat_to_ortho6d(ref_body_X_sc[:, :, 3:7])
+        body_ortho6d_diff = tu.ortho6d_diff(body_ortho6d, ref_body_ortho6d)
         # pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
-        rot_reward = -2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1)
+        rot_reward = -2 * torch.sum(torch.sum(body_ortho6d_diff ** 2, dim=-1), dim=-1)
         
         body_pos = body_X_sc[:, :, 0:3]
         ref_body_pos = ref_body_X_sc[:, :, 0:3]
