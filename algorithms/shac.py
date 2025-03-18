@@ -123,7 +123,11 @@ class SHAC:
         self.truncate_grad = cfg["params"]["config"]["truncate_grads"]
         self.grad_norm = cfg["params"]["config"]["grad_norm"]
         self.use_grad_per_env = cfg["params"]["config"].get('use_grad_per_env', False)
-        
+        self.use_grad_penalize = cfg["params"]["config"].get('use_grad_penalize', False)
+        self.grad_penalize_alpha = cfg["params"]["config"].get('grad_penalize_alpha', 0.8)
+        self.grad_penalize_r = cfg["params"]["config"].get('grad_penalize_r', 0.05)
+        self.grad_penalize_coeff = cfg["params"]["config"].get('grad_penalize_coeff', 0.04)
+
         if cfg['params']['general']['train']:
             self.log_dir = cfg["params"]["general"]["logdir"]
             os.makedirs(self.log_dir, exist_ok = True)
@@ -164,8 +168,8 @@ class SHAC:
             self.save('init_policy')
     
         # initialize optimizer
-        self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), betas = cfg['params']['config']['betas'], lr = self.actor_lr)
-        self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), betas = cfg['params']['config']['betas'], lr = self.critic_lr)
+        self.actor_optimizer = torch.optim.AdamW(self.actor.parameters(), betas = cfg['params']['config']['betas'], lr = self.actor_lr)
+        self.critic_optimizer = torch.optim.AdamW(self.critic.parameters(), betas = cfg['params']['config']['betas'], lr = self.critic_lr)
 
         # replay buffer
         self.obs_buf = torch.zeros((self.steps_num, self.num_envs, self.num_obs), dtype = torch.float32, device = self.device)
@@ -449,9 +453,156 @@ class SHAC:
     def run(self, num_games):
         mean_policy_loss, mean_policy_discounted_loss, mean_episode_length = self.evaluate_policy(num_games = num_games, deterministic = not self.stochastic_evaluation)
         print_info('mean episode loss = {}, mean discounted loss = {}, mean episode length = {}'.format(mean_policy_loss, mean_policy_discounted_loss, mean_episode_length))
+
+    def get_actor_loss(self):
+        """
+        Make a clouse to calculate the actor loss and the gradient of the actor loss.
+        """
+        def actor_closure():
+            self.actor_optimizer.zero_grad()
+
+            self.time_report.start_timer("compute actor loss")
+
+            self.time_report.start_timer("forward simulation")
+            actor_loss = self.compute_actor_loss()
+            self.time_report.end_timer("forward simulation")
+
+            self.time_report.start_timer("backward simulation")
+
+            self.valid_env_mask = None
+            actor_loss.backward()
+
+            with torch.no_grad():
+                self.grad_norm_before_clip = tu.grad_norm(self.actor.parameters())
+                if self.truncate_grad:
+                    clip_grad_norm_(self.actor.parameters(), self.grad_norm)
+                self.grad_norm_after_clip = tu.grad_norm(self.actor.parameters()) 
+                
+                # sanity check
+                if torch.isnan(self.grad_norm_before_clip) or self.grad_norm_before_clip > 1000000.:
+                    print('NaN gradient. grad norm before clip = {:.2f}'.format(self.grad_norm_before_clip))
+                    raise ValueError
+
+            self.time_report.end_timer("compute actor loss")
+
+            return actor_loss
+
+        return actor_closure
+
+    def get_actor_loss_penalize_gradient(self):
+        """
+        Make a closure to calculate the actor loss and the gradient of the actor loss.
+        It calculates the gradient twice, to add penalization to the gradient.
+        """
+        def actor_closure():
+            self.actor_optimizer.zero_grad()
+            # make a checkpoint of env, to repeat the same environment
+            env_checkpoint = self.env.get_checkpoint()
+
+            self.time_report.start_timer("compute actor loss")
+
+            self.time_report.start_timer("forward simulation")
+            actor_loss = self.compute_actor_loss()
+            self.time_report.end_timer("forward simulation")
+
+            self.time_report.start_timer("backward simulation")
+            self.valid_env_mask = None
+            grads = torch.autograd.grad(actor_loss, self.actor.parameters(), create_graph=True)
+
+            ### gradient penalization
+            # concatenate all gradients
+            concatenated_grads = torch.cat([g.view(-1) for g in grads])
+            # normalize the gradient
+            normalized_grads = concatenated_grads / (torch.norm(concatenated_grads) + 1e-6)
+
+            # calculate hessian x normalized_grads
+            hessian_dot_normalized_grads = torch.autograd.grad(concatenated_grads, self.actor.parameters(), normalized_grads)
+            self.time_report.end_timer("backward simulation")
+
+            self.hessian_grad_norm = torch.norm(torch.cat([g.view(-1) for g in hessian_dot_normalized_grads]))
+
+            # update the gradient
+            for p, c_g, h_dot_n_g in zip(self.actor.parameters(), grads, hessian_dot_normalized_grads):
+                p.grad = c_g + self.grad_penalize_coeff * h_dot_n_g
+
+            with torch.no_grad():
+                self.grad_norm_before_clip = tu.grad_norm(self.actor.parameters())
+                if self.truncate_grad:
+                    clip_grad_norm_(self.actor.parameters(), self.grad_norm)
+                self.grad_norm_after_clip = tu.grad_norm(self.actor.parameters()) 
+                
+                # sanity check
+                if torch.isnan(self.grad_norm_before_clip) or self.grad_norm_before_clip > 1000000.:
+                    print('NaN gradient. grad norm before clip = {:.2f}'.format(self.grad_norm_before_clip))
+                    raise ValueError
+
+            self.time_report.end_timer("compute actor loss")
+
+            return actor_loss
+        return actor_closure
+
+    def get_actor_loss_per_env(self):
+        """
+        Compute the actor loss for each environment, and returns mean of the actor loss.
+        """
+        def actor_closure():
+            self.actor_optimizer.zero_grad()
+
+            self.time_report.start_timer("compute actor loss")
+
+            self.time_report.start_timer("forward simulation")
+            actor_loss_per_env = self.compute_actor_loss()
+            self.time_report.end_timer("forward simulation")
+
+            self.time_report.start_timer("backward simulation")
+
+            parameters = list(self.actor.parameters())
+            final_grads = []
+            self.valid_env_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
+            for i in range(self.num_envs):
+                grads = torch.autograd.grad(actor_loss_per_env[i], parameters, retain_graph=True)
+                grad_norm = torch.sqrt(sum([torch.sum(g ** 2) for g in grads]))
+                if torch.isnan(grad_norm) or grad_norm > 1000000.:
+                    continue
+                self.valid_env_mask[i] = True
+
+                if len(final_grads) == 0:
+                    final_grads = grads
+                else:
+                    for g1, g2 in zip(final_grads, grads):
+                        g1 += g2
+
+            valid_envs = self.valid_env_mask.sum()
+            for p, g in zip(parameters, final_grads):
+                p.grad = g / valid_envs
+
+            if valid_envs == 0:
+                print('all envs are invalid.')
+                raise ValueError
+
+            if valid_envs != self.num_envs:
+                print(f'truncated {self.num_envs - valid_envs} envs. invalid envs: {(~self.valid_env_mask).nonzero()}')
+            self.time_report.end_timer("backward simulation")
+
+            with torch.no_grad():
+                self.grad_norm_before_clip = tu.grad_norm(self.actor.parameters())
+                if self.truncate_grad:
+                    clip_grad_norm_(self.actor.parameters(), self.grad_norm)
+                self.grad_norm_after_clip = tu.grad_norm(self.actor.parameters()) 
+                
+                # sanity check
+                if torch.isnan(self.grad_norm_before_clip) or self.grad_norm_before_clip > 1000000.:
+                    print('NaN gradient. grad norm before clip = {:.2f}'.format(self.grad_norm_before_clip))
+                    raise ValueError
+
+            self.time_report.end_timer("compute actor loss")
+
+            return torch.mean(actor_loss_per_env)
+        return actor_closure
         
     def train(self):
-        torch.autograd.set_detect_anomaly(True)
+        # torch.autograd.set_detect_anomaly(True)
         # load checkpoint
         self.start_time = time.time()
 
@@ -473,70 +624,6 @@ class SHAC:
         self.episode_length = torch.zeros(self.num_envs, dtype = int)
         self.episode_gamma = torch.ones(self.num_envs, dtype = torch.float32, device = self.device)
         
-        def actor_closure():
-            self.actor_optimizer.zero_grad()
-
-            self.time_report.start_timer("compute actor loss")
-
-            self.time_report.start_timer("forward simulation")
-            if self.use_grad_per_env:
-                actor_loss_per_env = self.compute_actor_loss()
-            else:
-                actor_loss = self.compute_actor_loss()
-            self.time_report.end_timer("forward simulation")
-
-            self.time_report.start_timer("backward simulation")
-
-            if self.use_grad_per_env:
-                parameters = list(self.actor.parameters())
-                final_grads = []
-                self.valid_env_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-
-                for i in range(self.num_envs):
-                    grads = torch.autograd.grad(actor_loss_per_env[i], parameters, retain_graph=True)
-                    grad_norm = torch.sqrt(sum([torch.sum(g ** 2) for g in grads]))
-                    if torch.isnan(grad_norm) or grad_norm > 1000000.:
-                        continue
-                    self.valid_env_mask[i] = True
-
-                    if len(final_grads) == 0:
-                        final_grads = grads
-                    else:
-                        for g1, g2 in zip(final_grads, grads):
-                            g1 += g2
-
-                valid_envs = self.valid_env_mask.sum()
-                for p, g in zip(parameters, final_grads):
-                    p.grad = g / valid_envs
-
-                if valid_envs == 0:
-                    print('all envs are invalid.')
-                    raise ValueError
-
-                if valid_envs != self.num_envs:
-                    print(f'truncated {self.num_envs - valid_envs} envs. invalid envs: {(~self.valid_env_mask).nonzero()}')
-            else:
-                self.valid_env_mask = None
-                actor_loss.backward()
-            self.time_report.end_timer("backward simulation")
-
-            with torch.no_grad():
-                self.grad_norm_before_clip = tu.grad_norm(self.actor.parameters())
-                if self.truncate_grad:
-                    clip_grad_norm_(self.actor.parameters(), self.grad_norm)
-                self.grad_norm_after_clip = tu.grad_norm(self.actor.parameters()) 
-                
-                # sanity check
-                if torch.isnan(self.grad_norm_before_clip) or self.grad_norm_before_clip > 1000000.:
-                    print('NaN gradient. grad norm before clip = {:.2f}'.format(self.grad_norm_before_clip))
-                    raise ValueError
-
-            self.time_report.end_timer("compute actor loss")
-
-            if self.use_grad_per_env:
-                return torch.mean(actor_loss_per_env)
-            else:
-                return actor_loss
 
         # main training process
         for epoch in range(self.max_epochs):
@@ -556,6 +643,12 @@ class SHAC:
 
             # train actor
             self.time_report.start_timer("actor training")
+            if self.use_grad_penalize:
+                actor_closure = self.get_actor_loss_penalize_gradient()
+            elif self.use_grad_per_env:
+                actor_closure = self.get_actor_loss_per_env()
+            else:
+                actor_closure = self.get_actor_loss()
             self.actor_optimizer.step(actor_closure).detach().item()
             self.time_report.end_timer("actor training")
 
@@ -634,10 +727,10 @@ class SHAC:
                 mean_policy_discounted_loss = np.inf
                 mean_episode_length = 0
 
-            print('iter {}: ep loss {:.2f}, ep discounted loss {:.2f}, ep len {:.1f}, fps total {:.2f}, value loss {:.2f}, grad norm before clip {:.2f}, grad norm after clip {:.2f}'.format(
+            print('iter {}: ep loss {:.2f}, ep discounted loss {:.2f}, ep len {:.1f}, fps total {:.2f}, value loss {:.2f}, grad norm before clip {:.2f}, grad norm after clip {:.2f}, hessian grad norm {:.2f}'.format(
                     self.iter_count, mean_policy_loss, mean_policy_discounted_loss, mean_episode_length, 
                     self.steps_num * self.num_envs / (time_end_epoch - time_start_epoch), self.value_loss, 
-                    self.grad_norm_before_clip, self.grad_norm_after_clip))
+                    self.grad_norm_before_clip, self.grad_norm_after_clip, self.hessian_grad_norm))
             self.writer.flush()
 
             # ---- MLFlow logging (added) ----
@@ -653,7 +746,7 @@ class SHAC:
                 all_metrics.append(Metric(key="best_policy_loss_iter", value=self.best_policy_loss, step=self.iter_count, timestamp=timestamp_now))
                 all_metrics.append(Metric(key="episode_lengths_iter", value=mean_episode_length, step=self.iter_count, timestamp=timestamp_now))
                 all_metrics.append(Metric(key="grad_norm_before_clip_iter", value=self.grad_norm_before_clip, step=self.iter_count, timestamp=timestamp_now))
-
+                all_metrics.append(Metric(key="hessian_grad_norm_iter", value=self.hessian_grad_norm, step=self.iter_count, timestamp=timestamp_now))
             get_mlflow_client().log_batch(get_current_run().info.run_id, all_metrics)
             # ---- End MLFlow logging ----
 

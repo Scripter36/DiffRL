@@ -32,8 +32,13 @@ params:
     betas: [0.7, 0.95] # adam
     max_epochs: 2000
     steps_num: 32
-    grad_norm: 1.0 
+    grad_norm: 1.0
     truncate_grads: True
+    use_grad_per_env: False
+    use_grad_penalize: True
+    grad_penalize_alpha: 0.8
+    grad_penalize_r: 0.05
+    grad_penalize_coeff: 0.04
     num_actors: 64
     save_interval: 200
 
