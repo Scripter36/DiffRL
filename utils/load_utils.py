@@ -922,7 +922,7 @@ def load_bvh(
             if bvh_name in bvh_link_map:
                 bvh_index = bvh_link_map[bvh_name]
                 joint_xforms[frame, bvh_index, :] = torch.tensor(
-                    np.concatenate((pos * pos_scale, quat))
+                    np.concatenate((pos * pos_scale, quat / np.linalg.norm(quat)))
                 )
 
     # 5. convert joint_xforms to joint_q
@@ -937,29 +937,30 @@ def load_bvh(
             type = model.joint_type[bvh_index]
             if type == df.JOINT_FREE:
                 joint_q[:, start:end] = joint_xforms[:, bvh_index, :]
-                # calculate qd
-                joint_qd[frame_indices, start_qd : start_qd + 3] = (
-                    tu.angular_velocity(
-                        joint_q[frame_indices + 1, start + 3 : start + 7],
-                        joint_q[frame_indices, start + 3 : start + 7],
-                    )
-                    / dt
-                )  # w
+                # calculate w
+                joint_qd[frame_indices, start_qd : start_qd + 3] = tu.angular_velocity(
+                    joint_q[frame_indices, start + 3 : start + 7],
+                    joint_q[frame_indices + 1, start + 3 : start + 7],
+                    dt
+                )
+                # calculate v
                 joint_qd[frame_indices, start_qd + 3 : end_qd] = (
                     joint_q[frame_indices + 1, start : start + 3]
                     - joint_q[frame_indices, start : start + 3]
-                ) / dt  # v
+                ) / dt - torch.cross(
+                    joint_qd[frame_indices, start_qd : start_qd + 3],
+                    joint_q[frame_indices, start : start + 3],
+                    dim=-1
+                )
             elif type == df.JOINT_BALL:
                 # only copy quat
                 joint_q[:, start:end] = joint_xforms[:, bvh_index, 3:]
                 # calculate qd
-                joint_qd[frame_indices, start_qd : start_qd + 3] = (
-                    tu.angular_velocity(
-                        joint_q[frame_indices + 1, start : start + 4],
-                        joint_q[frame_indices, start : start + 4],
-                    )
-                    / dt
-                )  # w
+                joint_qd[frame_indices, start_qd : start_qd + 3] = tu.angular_velocity(
+                    joint_q[frame_indices, start : start + 4],
+                    joint_q[frame_indices + 1, start : start + 4],
+                    dt
+                )
             elif type == df.JOINT_REVOLUTE:
                 joint_quat = joint_xforms[:, bvh_index, 3:]
                 # convert quaternion to angle around reference axis

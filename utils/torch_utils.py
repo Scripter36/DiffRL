@@ -235,16 +235,24 @@ def ortho6d_diff(o1, o2):
     return torch.sum((o1 - o2) ** 2, dim=-1).view(shape[:-1]).unsqueeze(-1) / 3.0
 
 @torch.jit.script
-def angular_velocity(q1, q2):
+def angular_velocity(q1, q2, dt: float):
     """
     q1: (num_envs, 4)
     q2: (num_envs, 4)
     return: (num_envs, 3)
     """
-    return 2 * torch.stack([
-        q1[:, 3]*q2[:, 0] - q1[:, 0]*q2[:, 3] - q1[:, 1]*q2[:, 2] + q1[:, 2]*q2[:, 1],
-        q1[:, 3]*q2[:, 1] - q1[:, 1]*q2[:, 3] - q1[:, 2]*q2[:, 0] + q1[:, 0]*q2[:, 2],
-        q1[:, 3]*q2[:, 2] - q1[:, 2]*q2[:, 3] - q1[:, 0]*q2[:, 1] + q1[:, 1]*q2[:, 0]], dim=-1)
+    # TODO: better quaternion flipping
+    dq = (q2 - q1)
+    dq_prime = (-q2 - q1)
+    # select the one with the smallest norm
+    dq_dt = torch.where(torch.norm(dq, dim=-1).unsqueeze(-1).repeat(1, 4) < torch.norm(dq_prime, dim=-1).unsqueeze(-1).repeat(1, 4), dq, dq_prime) / dt
+    w = (2 * quat_mul(dq_dt, quat_conjugate(q1)))
+    diff = dq_dt - 0.5 * quat_mul(w, q1)
+    diff_prime = dq_dt - 0.5 * quat_mul(-w, q1)
+    # select the one with the smallest norm
+    final_w = torch.where(torch.norm(diff, dim=-1).unsqueeze(-1).repeat(1, 4) < torch.norm(diff_prime, dim=-1).unsqueeze(-1).repeat(1, 4), w, -w)
+    # final_diff = dq_dt - 0.5 * quat_mul(final_w, q1)
+    return final_w[:, :3]
 
 # assuming q is unit quaternion
 @torch.jit.script
