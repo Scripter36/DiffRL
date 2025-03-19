@@ -795,7 +795,6 @@ def load_bvh(
     filename,
     bvh_link_map: "dict[str, int]",
     model: df.Model,
-    dt: float,
     pos_scale: float = 0.01,
 ) -> "tuple[float, int, torch.Tensor, torch.Tensor]":
     # 1. load skeleton structure, and map the bvh joint names to indices.
@@ -944,13 +943,13 @@ def load_bvh(
                 w = tu.angular_velocity(
                     joint_q[frame_indices, start + 3 : start + 7],
                     joint_q[frame_indices + 1, start + 3 : start + 7],
-                    dt
+                    frame_time
                 )
                 # calculate v
                 v = (
                     joint_q[frame_indices + 1, start : start + 3]
                     - joint_q[frame_indices, start : start + 3]
-                ) / dt - torch.cross(
+                ) / frame_time - torch.cross(
                     w,
                     joint_q[frame_indices, start : start + 3],
                     dim=-1
@@ -964,7 +963,7 @@ def load_bvh(
                 joint_qd[frame_indices, start_qd : start_qd + 3] = tu.angular_velocity(
                     joint_q[frame_indices, start : start + 4],
                     joint_q[frame_indices + 1, start : start + 4],
-                    dt
+                    frame_time
                 )
             elif type == df.JOINT_REVOLUTE:
                 joint_quat = joint_xforms[:, bvh_index, 3:]
@@ -1010,7 +1009,7 @@ def load_bvh(
                 joint_qd[frame_indices, start_qd : start_qd + 1] = (
                     joint_q[frame_indices + 1, start : start + 1]
                     - joint_q[frame_indices, start : start + 1]
-                ) / dt
+                ) / frame_time
 
     # 4. return the frame time and joint_q array.
     return frame_time, frames, joint_q, joint_q_mask, joint_qd

@@ -164,7 +164,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
         # load reference motion
         self.reference_frame_time, self.reference_frame_count, self.reference_joint_q, self.reference_joint_q_mask, self.reference_joint_qd = \
-            lu.load_bvh(os.path.join(self.asset_folder, "motion/walk.bvh"), self.skeletons[0].bvh_map, self.model, self.dt)
+            lu.load_bvh(os.path.join(self.asset_folder, "motion/walk.bvh"), self.skeletons[0].bvh_map, self.model)
 
         # end effector indices
         self.end_effector_indices = [4, 9] # FootThumbR, FootThumbL
@@ -461,8 +461,8 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
             if self.stochastic_init:
                 self.progress_buf[env_ids] = 0
                 # randomize the reset start frame to learn all reference frames uniformly
-                # self.offset_buf[env_ids] = torch.floor(torch.rand(len(env_ids), device=self.device) * (self.reference_frame_count * self.reference_frame_time / self.dt - 1)).long()
-                self.offset_buf[env_ids] = 0
+                self.offset_buf[env_ids] = torch.floor(torch.rand(len(env_ids), device=self.device) * (self.reference_frame_count * self.reference_frame_time / self.dt - 1)).long()
+                # self.offset_buf[env_ids] = 0
                 self.start_frame_offset = 0
                 self.reference_frame[env_ids] = 0
                 self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
