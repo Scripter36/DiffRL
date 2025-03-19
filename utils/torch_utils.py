@@ -241,18 +241,16 @@ def angular_velocity(q1, q2, dt: float):
     q2: (num_envs, 4)
     return: (num_envs, 3)
     """
-    # TODO: better quaternion flipping
     dq = (q2 - q1)
-    dq_prime = (-q2 - q1)
-    # select the one with the smallest norm
-    dq_dt = torch.where(torch.norm(dq, dim=-1).unsqueeze(-1).repeat(1, 4) < torch.norm(dq_prime, dim=-1).unsqueeze(-1).repeat(1, 4), dq, dq_prime) / dt
+    dq_dt = dq / dt
     w = (2 * quat_mul(dq_dt, quat_conjugate(q1)))
-    diff = dq_dt - 0.5 * quat_mul(w, q1)
-    diff_prime = dq_dt - 0.5 * quat_mul(-w, q1)
+    # diff = dq_dt - 0.5 * quat_mul(w, q1)
+    # diff_prime = dq_dt - 0.5 * quat_mul(-w, q1)
     # select the one with the smallest norm
-    final_w = torch.where(torch.norm(diff, dim=-1).unsqueeze(-1).repeat(1, 4) < torch.norm(diff_prime, dim=-1).unsqueeze(-1).repeat(1, 4), w, -w)
-    # final_diff = dq_dt - 0.5 * quat_mul(final_w, q1)
-    return final_w[:, :3]
+    # final_w = torch.where(torch.norm(diff, dim=-1).unsqueeze(-1).repeat(1, 4) < torch.norm(diff_prime, dim=-1).unsqueeze(-1).repeat(1, 4), w, -w)
+    # final_diff = dq_dt - 0.5 * quat_mul(w, q1)
+    # print(f'final_diff norm: {torch.norm(final_diff)}')
+    return w[:, :3]
 
 # assuming q is unit quaternion
 @torch.jit.script

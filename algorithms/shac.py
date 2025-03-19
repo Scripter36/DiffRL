@@ -471,6 +471,8 @@ class SHAC:
 
             self.valid_env_mask = None
             actor_loss.backward()
+            
+            self.time_report.end_timer("backward simulation")
 
             with torch.no_grad():
                 self.grad_norm_before_clip = tu.grad_norm(self.actor.parameters())
@@ -727,10 +729,16 @@ class SHAC:
                 mean_policy_discounted_loss = np.inf
                 mean_episode_length = 0
 
-            print('iter {}: ep loss {:.2f}, ep discounted loss {:.2f}, ep len {:.1f}, fps total {:.2f}, value loss {:.2f}, grad norm before clip {:.2f}, grad norm after clip {:.2f}, hessian grad norm {:.2f}'.format(
+            if self.use_grad_penalize:
+                print('iter {}: ep loss {:.2f}, ep discounted loss {:.2f}, ep len {:.1f}, fps total {:.2f}, value loss {:.2f}, grad norm before clip {:.2f}, grad norm after clip {:.2f}, hessian grad norm {:.2f}'.format(
                     self.iter_count, mean_policy_loss, mean_policy_discounted_loss, mean_episode_length, 
                     self.steps_num * self.num_envs / (time_end_epoch - time_start_epoch), self.value_loss, 
                     self.grad_norm_before_clip, self.grad_norm_after_clip, self.hessian_grad_norm))
+            else:
+                print('iter {}: ep loss {:.2f}, ep discounted loss {:.2f}, ep len {:.1f}, fps total {:.2f}, value loss {:.2f}, grad norm before clip {:.2f}, grad norm after clip {:.2f}'.format(
+                    self.iter_count, mean_policy_loss, mean_policy_discounted_loss, mean_episode_length, 
+                    self.steps_num * self.num_envs / (time_end_epoch - time_start_epoch), self.value_loss, 
+                    self.grad_norm_before_clip, self.grad_norm_after_clip))
             self.writer.flush()
 
             # ---- MLFlow logging (added) ----
@@ -746,7 +754,9 @@ class SHAC:
                 all_metrics.append(Metric(key="best_policy_loss_iter", value=self.best_policy_loss, step=self.iter_count, timestamp=timestamp_now))
                 all_metrics.append(Metric(key="episode_lengths_iter", value=mean_episode_length, step=self.iter_count, timestamp=timestamp_now))
                 all_metrics.append(Metric(key="grad_norm_before_clip_iter", value=self.grad_norm_before_clip, step=self.iter_count, timestamp=timestamp_now))
-                all_metrics.append(Metric(key="hessian_grad_norm_iter", value=self.hessian_grad_norm, step=self.iter_count, timestamp=timestamp_now))
+                all_metrics.append(Metric(key="grad_norm_after_clip_iter", value=self.grad_norm_after_clip, step=self.iter_count, timestamp=timestamp_now))
+                if self.use_grad_penalize:
+                    all_metrics.append(Metric(key="hessian_grad_norm_iter", value=self.hessian_grad_norm, step=self.iter_count, timestamp=timestamp_now))
             get_mlflow_client().log_batch(get_current_run().info.run_id, all_metrics)
             # ---- End MLFlow logging ----
 

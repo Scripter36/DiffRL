@@ -183,7 +183,6 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         start_height = self.reference_joint_q[0, 1] - 0.10
         self.start_pos = torch.tensor((0.0, start_height, 0.0), dtype=torch.float32, device=self.device)
         self.reference_pos_offset = self.start_pos.unsqueeze(0).repeat(self.num_envs, 1) - self.reference_joint_q[0, 0:3]
-        self.reference_pos_offset[:, 1] += 0.0
         self.start_reference_pos_offset = self.reference_pos_offset.clone()
 
         if (self.model.ground):
@@ -681,6 +680,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         # imitation_reward = w_p * pos_reward + w_v * vel_reward + w_e * end_effector_reward + w_c * com_reward
         # instead, use multiplied reward
         imitation_reward = rot_reward + end_effector_reward + com_reward + 1.0
+        # imitation_reward = torch.exp(rot_reward + end_effector_reward + com_reward)
         # live_reward = torch.ones_like(imitation_reward) * 0.3
 
         # goal reward
@@ -718,7 +718,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         # body_pos_diff = relative_body_X_sc[:, :, 0:3] - ref_relative_body_X_sc[:, :, 0:3]
         # self.reset_buf = torch.where(torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1) > 0.2, torch.ones_like(self.reset_buf),
         #                                 self.reset_buf)
-        # if imitation reward is less than 0.3, reset
+        # if imitation reward is less than 0.1, reset
         self.reset_buf = torch.where(imitation_reward < -1.3, torch.ones_like(self.reset_buf), self.reset_buf)
         
         # normal termination
@@ -769,6 +769,11 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         
         # apply the offset to the reference model
         next_state.joint_q.view(self.num_envs, -1)[:, :3] += self.reference_pos_offset
+        # linear velocity fix
+        next_state.joint_qd.view(self.num_envs, -1)[:, 3:6] -= torch.cross(
+            next_state.joint_qd.view(self.num_envs, -1)[:, 0:3],
+            self.reference_pos_offset,
+        )
 
         # perform forward kinematics
         body_X_sc, body_X_sm = eval_rigid_fk_grad(self.reference_model, next_state.joint_q)
@@ -800,6 +805,11 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
         # reset position
         self.state.joint_q.view(self.num_envs, -1)[env_ids, :3] += self.start_reference_pos_offset[env_ids]
+        # linear velocity fix
+        self.state.joint_qd.view(self.num_envs, -1)[env_ids, 3:6] -= torch.cross(
+            self.state.joint_qd.view(self.num_envs, -1)[env_ids, 0:3],
+            self.start_reference_pos_offset[env_ids],
+        )
 
         if perform_forward_kinematics:
             body_X_sc, body_X_sm = eval_rigid_fk_grad(self.model, self.state.joint_q)
