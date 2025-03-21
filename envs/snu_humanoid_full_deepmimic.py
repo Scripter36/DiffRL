@@ -40,18 +40,20 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # df.config.verify_fp = True
 
         self.filter = {}
-        self.num_joint_q = 71
-        self.num_joint_qd = 56
-        self.num_muscles = 284
-        num_obs = 187
 
         self.skeletons = []
 
         self.inv_control_freq = 1
 
+
+        self.num_joint_q = 71
+        self.num_joint_qd = 56
+
         self.num_dof = self.num_joint_q - 7  # 22
+        self.num_muscles = 284
 
         num_act = self.num_muscles
+        num_obs = self.phase_range.stop
 
         super(SNUHumanoidFullDeepMimicEnv, self).__init__(num_envs, num_obs, num_act, episode_length, MM_caching_frequency, seed,
                                                  no_grad, render, render_name, device)
@@ -61,6 +63,9 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.offset_buf = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.long, requires_grad=False)
         self.start_frame_offset = 0
+        # Initialize render buffer
+        self.render_buffer = []  # List to store frames for all environments
+        self.render_buffer_max_size = episode_length  # Maximum number of frames to store
 
         self.init_sim()
 
@@ -86,8 +91,8 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.builder = df.ModelBuilder()
         self.reference_builder = df.ModelBuilder()
 
-        self.dt = 1.0 / 120.0
-        self.sim_substeps = 24
+        self.dt = 1.0 / 60.0
+        self.sim_substeps = 48
 
         self.sim_dt = self.dt
 
@@ -115,8 +120,6 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.targets = tu.to_torch([0.0, 0.0, 10000.0], device=self.device, requires_grad=False).repeat(
             (self.num_envs, 1))
 
-        self.start_pos = []
-
         if self.visualize:
             self.env_dist = 2.0
         else:
@@ -128,7 +131,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         asset_path = os.path.join(self.asset_folder, "human.xml")
         muscle_path = os.path.join(self.asset_folder, "muscle284.xml")
 
-        for i in range(self.num_environments):
+        for _ in range(self.num_environments):
             self.skeletons.append(lu.Skeleton(asset_path, muscle_path, self.builder, self.filter,
                                        stiffness=5.0,
                                        damping=2.0, # stiffness and damping = k_p, k_d in PD control
@@ -155,9 +158,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.model = self.builder.finalize(self.device)
         self.model.ground = self.ground
         self.model.gravity = torch.tensor((0.0, -9.81, 0.0), dtype=torch.float32, device=self.device)
-        # turn off collision and gravity
-        # self.model.ground = False
-        # self.model.gravity = torch.tensor((0.0, 0.0, 0.0), dtype=torch.float32, device=self.device)
+        self.model.friction_smoothing = 0.25
 
         # load reference motion
         self.reference_frame_time, self.reference_frame_count, self.reference_joint_q, self.reference_joint_q_mask, self.reference_joint_qd = \
@@ -174,6 +175,13 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         self.state = self.model.state()
         self.reference_state = self.reference_model.state()
+        self.reference_frame = torch.zeros((self.num_envs), dtype=torch.long, device=self.device)
+
+        # move ref pos to the initial pos
+        start_height = self.reference_joint_q[0, 1] - 0.10
+        self.start_pos = torch.tensor((0.0, start_height, 0.0), dtype=torch.float32, device=self.device)
+        self.reference_pos_offset = self.start_pos.unsqueeze(0).repeat(self.num_envs, 1) - self.reference_joint_q[0, 0:3]
+        self.start_reference_pos_offset = self.reference_pos_offset.clone()
 
         if (self.model.ground):
             self.model.collide(self.state)
@@ -181,104 +189,169 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         # copy the reference motion to the state
         self.copy_ref_pos_to_state()
 
-    def render(self, mode='human'):
+    def render(self, mode='human', render_env_ids=None):
+        """
+        Render all frames in the render buffer for specified environments.
+        
+        Args:
+            mode: Render mode (unused)
+            render_env_ids: List of environment IDs to render. If None, renders only the active environment.
+        """
         render_asset_folder = self.asset_folder
-
-        if self.visualize:
-            self.render_time += self.dt * self.inv_control_freq
-            with torch.no_grad():
-
+        
+        if len(self.render_buffer) == 0:
+            return
+            
+        if render_env_ids is None:
+            # Default to the active environment
+            render_env_ids = torch.arange(self.num_envs, device=self.device)
+        # Reset render time
+        render_time = 0.0
+        
+        with torch.no_grad():
+            from tqdm import tqdm
+            for frame in tqdm(self.render_buffer, desc="Rendering", leave=False):
+                # Extract state and observation data from the buffer
+                state = frame['state']
+                obs = frame['obs'][render_env_ids]  # Only get observations for selected environments
+                reference_state = frame['reference_state']
+                muscle_activation = frame['muscle_activation']
+                # muscle_l_m_norm = frame['muscle_l_m_norm']
+                
+                # Render this frame for selected environments
                 muscle_start = 0
                 skel_index = 0
 
-                for s in self.skeletons:
+                for i in render_env_ids:
+                    s = self.skeletons[i]
                     for mesh, link in s.mesh_map.items():
-
                         if link != -1:
-                            X_sc = df.transform_expand(self.state.body_X_sc[link].tolist())
-
+                            # We need to extract the right transforms for each link
+                            # This depends on how the body_X_sc is organized in the state
+                            link_X_sc = state.body_X_sc.view(self.num_envs, -1, 7)[i, link]
+                            X_sc = df.transform_expand(link_X_sc.tolist())
                             mesh_path = os.path.join(render_asset_folder, "OBJ/" + mesh + ".usd")
-
-                            self.renderer.add_mesh(mesh, mesh_path, X_sc, 1.0, self.render_time)
+                            self.renderer.add_mesh(mesh, mesh_path, X_sc, 1.0, render_time)
 
                     for m in range(len(s.muscles)):
-
                         start = self.model.muscle_start[muscle_start + m].item()
                         end = self.model.muscle_start[muscle_start + m + 1].item()
-
                         points = []
 
                         for w in range(start, end):
                             link = self.model.muscle_links[w].item()
                             point = self.model.muscle_points[w].cpu().numpy()
-
-                            X_sc = df.transform_expand(self.state.body_X_sc[link].cpu().tolist())
-
+                            
+                            # Get the transform for this specific environment and link
+                            link_X_sc = state.body_X_sc.view(self.num_envs, -1, 7)[i, link]
+                            X_sc = df.transform_expand(link_X_sc.cpu().tolist())
                             points.append(Gf.Vec3f(df.transform_point(X_sc, point).tolist()))
 
+                        # Get muscle activation for this environment
+                        env_muscle_activation = muscle_activation.view(self.num_envs, -1)[i, muscle_start + m]
+                        # env_muscle_l_m_norm = muscle_l_m_norm.view(self.num_envs, -1)[i, muscle_start + m]
+                        activation_color = env_muscle_activation.item()
+                        # length_color = max(min(1.0, env_muscle_l_m_norm.item() - 1.0), 0.0)
+                        length_color = 0.2
+                        
                         self.renderer.add_line_strip(points, name=s.muscles[m].name + str(skel_index),
-                                                        radius=0.0075, color=(
-                                self.model.muscle_activation[muscle_start + m], 0.2,
-                                0.5),
-                                                        time=self.render_time)
+                                                        radius=0.0075, color=(activation_color, length_color, 0.5),
+                                                        time=render_time)
 
                     muscle_start += len(s.muscles)
                     skel_index += 1
 
                 # add the observations and reference poses
                 # relative reference pos
-                ref_root_transform = self.reference_state.joint_q.view(self.num_envs, -1)[:, 0:7]
-                ref_relative_body_X_sc = tu.to_local_frame_spatial(self.reference_state.body_X_sc.view(self.num_envs, -1, 7).clone(), ref_root_transform).view(-1, 7)
+                ref_relative_body_X_sc = reference_state.body_X_sc.view(self.num_envs, -1, 7).clone()
 
-                for s in self.skeletons:
+                for i in render_env_ids:
+                    s = self.skeletons[i]
                     for mesh, link in s.mesh_map.items():
-
                         if link != -1:
-                            link_transform = ref_relative_body_X_sc[link]
+                            link_transform = ref_relative_body_X_sc[i, link]
                             link_transform[0] += 2
-                            link_transform[1] += 1
                             X_sc = df.transform_expand(link_transform.tolist())
-
                             mesh_path = os.path.join(render_asset_folder, "OBJ/" + mesh + ".usd")
-
-                            self.renderer.add_mesh(f'{mesh}_relative_refpos', mesh_path, X_sc, 1.0, self.render_time)
+                            self.renderer.add_mesh(f'{mesh}_relative_refpos', mesh_path, X_sc, 1.0, render_time)
+                
                 # relative
-                relative_body_X_sc = self.obs_buf[0, 25:-1].view(-1, 7).clone()
-                for s in self.skeletons:
+                relative_body_X_sc = state.body_X_sc.view(self.num_envs, -1, 7).clone()
+                for i in render_env_ids:
+                    s = self.skeletons[i]
                     for mesh, link in s.mesh_map.items():
-
                         if link != -1:
-                            link_transform = relative_body_X_sc[link]
+                            link_transform = relative_body_X_sc[i, link]
                             link_transform[0] += 2
-                            link_transform[1] += 1
                             X_sc = df.transform_expand(link_transform.tolist())
-
-
-
                             mesh_path = os.path.join(render_asset_folder, "OBJ/" + mesh + ".usd")
-
-                            self.renderer.add_mesh(f'{mesh}_relative', mesh_path, X_sc, 1.0, self.render_time)
-
+                            self.renderer.add_mesh(f'{mesh}_relative', mesh_path, X_sc, 1.0, render_time)
 
                 # Phase: add a sphere to move [10, phase, 10]
-                self.renderer.add_sphere((10, self.obs_buf[0, -1], 10), 0.1, "phase", self.render_time)
+                for i in render_env_ids:
+                    self.renderer.add_sphere((10, obs[i, -1], 10), 0.1, "phase", render_time)
 
-                # com_pos_local: add sphere
-                com_pos_local = self.obs_buf[0, 14:17].view(-1).clone()
-                com_pos_local[0] += 2
-                com_pos_local[1] += 1
-                self.renderer.add_sphere(com_pos_local.tolist(), 0.1, "com", self.render_time)
+                # com_pos: add sphere
+                com_pos = tu.get_center_of_mass(
+                    self.model.body_I_m.view(self.num_envs, -1, 6, 6),
+                    state.body_X_sm.view(self.num_envs, -1, 7)
+                ).view(-1, 3)
+                for i in render_env_ids:
+                    com_pos_i = com_pos[i, :]
+                    com_pos_i[0] += 2
+                    self.renderer.add_sphere(com_pos_i.tolist(), 0.1, "com", render_time)
 
-            self.renderer.update(self.state, self.render_time)
+                # reference com pos: add sphere
+                ref_com_pos = tu.get_center_of_mass(
+                    self.model.body_I_m.view(self.num_envs, -1, 6, 6),
+                    reference_state.body_X_sm.view(self.num_envs, -1, 7)
+                ).view(-1, 3)
+                for i in render_env_ids:
+                    ref_com_pos_i = ref_com_pos[i, :]
+                    ref_com_pos_i[0] += 2
+                    self.renderer.add_sphere(ref_com_pos_i.tolist(), 0.1, "ref_com", render_time)
 
-    def finalize_play(self):
-        if self.visualize:
-            try:
-                self.stage.Save()
-                print(f"Saved to outputs/{self.render_name}.usd")
-            except Exception as e:
-                print(f"USD save error: {e}")
+                # Update with the state view for this environment
+                self.renderer.update(state, render_time)
+                render_time += self.dt * self.inv_control_freq
 
+    def save_render(self):
+        """Save the USD stage to a file."""
+        try:
+            self.stage.Save()
+            print(f"Saved to outputs/{self.render_name}.usd")
+        except Exception as e:
+            print(f"USD save error: {e}")
+
+    def store_frame_in_buffer(self):
+        """Store current frame in render buffer for all environments"""
+        if len(self.render_buffer) >= self.render_buffer_max_size:
+            # If buffer is full, remove oldest frame
+            self.render_buffer.pop(0)
+        
+        # Store a deep copy of the current state and observation
+        frame = {
+            'state': self.model.state(),
+            'obs': self.obs_buf.clone(),
+            'reference_state': self.reference_model.state(),
+            'muscle_activation': self.model.muscle_activation.clone()
+        }
+        
+        # Copy values from current state to saved state
+        frame['state'].joint_q = self.state.joint_q.clone()
+        frame['state'].joint_qd = self.state.joint_qd.clone()
+        frame['state'].body_X_sc = self.state.body_X_sc.clone()
+        frame['state'].body_X_sm = self.state.body_X_sm.clone()
+        frame['state'].body_v_s = self.state.body_v_s.clone()
+        
+        # Copy values from current reference state
+        frame['reference_state'].joint_q = self.reference_state.joint_q.clone()
+        frame['reference_state'].joint_qd = self.reference_state.joint_qd.clone()
+        frame['reference_state'].body_X_sc = self.reference_state.body_X_sc.clone()
+        frame['reference_state'].body_X_sm = self.reference_state.body_X_sm.clone()
+        frame['reference_state'].body_v_s = self.reference_state.body_v_s.clone()
+        
+        self.render_buffer.append(frame)
 
     def step(self, actions):
         actions = actions.view((self.num_envs, self.num_actions))
@@ -322,6 +395,10 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
             self.state = self.integrator.forward(self.model, self.state, self.sim_dt, self.sim_substeps,
                                                  self.MM_caching_frequency)
             self.sim_time += self.sim_dt
+
+        # increment the progress buffer and the number of frames
+        self.progress_buf += 1
+        self.num_frames += 1
         
         # update the reference model
         with torch.no_grad():
@@ -335,11 +412,12 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         self.reset_buf = torch.zeros_like(self.reset_buf)
 
-        self.progress_buf += 1
-        self.num_frames += 1
-
         self.calculateObservations()
         self.calculateReward()
+
+        # Store current frame in render buffer
+        if self.visualize:
+            self.store_frame_in_buffer()
 
         # obs_buf and rew_buf gradient check
         if self.obs_buf.requires_grad:
@@ -359,43 +437,64 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         if len(env_ids) > 0:
             self.reset(env_ids)
 
-        with df.ScopedTimer("render", False):
-            self.render()
-
         return self.obs_buf, self.rew_buf, self.reset_buf, self.extras
 
     def reset(self, env_ids=None, force_reset=True):
+        """
+        Reset the specified environments and optionally render specific environments.
+        
+        Args:
+            env_ids: Environment IDs to reset
+            force_reset: Whether to force reset
+            render_env_ids: Environment IDs to render. If None, renders the active environment.
+        """
         if env_ids is None:
             if force_reset == True:
                 env_ids = torch.arange(self.num_envs, dtype=torch.long, device=self.device)
 
         if env_ids is not None:
+            # If this is a reset and we have visualization enabled, render the buffer
+            if self.visualize and len(self.render_buffer) > 0:
+                with df.ScopedTimer("render", False):
+                    self.render(env_ids)
+                    self.save_render()
+            
+            # Clear the render buffer after rendering
+            self.render_buffer = []
+            
             # copy the reference motion to the state
-            # randomize the reset start frame to learn all reference frames uniformly
-
             # randomization
             if self.stochastic_init:
                 self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = -60
+                # randomize the reset start frame to learn all reference frames uniformly
+                self.offset_buf[env_ids] = torch.floor(torch.rand(len(env_ids), device=self.device) * (self.reference_frame_count * self.reference_frame_time / self.dt - 1)).long()
+                # self.offset_buf[env_ids] = 0
                 self.start_frame_offset = 0
-                self.copy_ref_pos_to_state(env_ids)
-                # # start pos randomization
-                self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] = self.state.joint_q.view(self.num_envs, -1)[
-                                                                           env_ids, 0:3] + 0.05 * (torch.rand(
-                    size=(len(env_ids), 3), device=self.device) - 0.5) + torch.tensor([0.0, 0.025, 0.0], device=self.device).unsqueeze(0).repeat(len(env_ids), 1)
-                # # start rot randomization
-                angle = (torch.rand(len(env_ids), device=self.device) - 0.5) * np.pi / 36.0
-                axis = torch.nn.functional.normalize(torch.rand((len(env_ids), 3), device=self.device) - 0.5)
-                self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_mul(
-                    self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7], tu.quat_from_angle_axis(angle, axis))
-                # # start vel randomization
-                self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] += 0.05 * (
-                            torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
+                self.reference_frame[env_ids] = 0
+                self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
+                self.copy_ref_pos_to_state(env_ids, perform_forward_kinematics=True)
+                with torch.no_grad():
+                    self.update_reference_model()
+                    # start pos randomization
+                    # self.state.joint_q.view(self.num_envs, -1)[env_ids, 0:3] += (torch.rand(
+                    #     size=(len(env_ids), 3), device=self.device) - 0.5) * torch.tensor([0.05, 0.0, 0.05], device=self.device).unsqueeze(0).repeat(len(env_ids), 1)
+                    # # start rot randomization
+                    # angle = (torch.rand(len(env_ids), device=self.device) - 0.5) * np.pi / 36.0
+                    # axis = torch.nn.functional.normalize(torch.rand((len(env_ids), 3), device=self.device) - 0.5)
+                    # self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_mul(
+                    #     self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7], tu.quat_from_angle_axis(angle, axis))
+                    # # start vel randomization
+                    # self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] += 0.05 * (
+                    #             torch.rand(size=(len(env_ids), self.num_joint_qd), device=self.device) - 0.5)
             else:
                 self.progress_buf[env_ids] = 0
-                self.offset_buf[env_ids] = -60
+                self.offset_buf[env_ids] = 0
                 self.start_frame_offset = 0
-                self.copy_ref_pos_to_state(env_ids)
+                self.reference_frame[env_ids] = 0
+                self.reference_pos_offset[env_ids] = self.start_reference_pos_offset[env_ids].clone()
+                self.copy_ref_pos_to_state(env_ids, perform_forward_kinematics=True)
+                with torch.no_grad():
+                    self.update_reference_model()
 
             # clear action
             self.actions = self.actions.clone()
@@ -406,28 +505,27 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         return self.obs_buf
 
-
     def clear_grad(self, checkpoint=None):
         """
         cut off the gradient from the current state to previous states
         """
         with torch.no_grad():
             if checkpoint is None:
-                checkpoint = {}  # NOTE: any other things to restore?
-                checkpoint['joint_q'] = self.state.joint_q.clone()
-                checkpoint['joint_qd'] = self.state.joint_qd.clone()
-                checkpoint['actions'] = self.actions.clone()
-                checkpoint['progress_buf'] = self.progress_buf.clone()
-                checkpoint['obs_buf'] = self.obs_buf.clone()
+                checkpoint = self.get_checkpoint()
 
             current_joint_q = checkpoint['joint_q'].clone()
             current_joint_qd = checkpoint['joint_qd'].clone()
             self.state = self.model.state()
             self.state.joint_q = current_joint_q
             self.state.joint_qd = current_joint_qd
+            self.state.body_X_sc = checkpoint['body_X_sc'].clone()
+            self.state.body_X_sm = checkpoint['body_X_sm'].clone()
+            self.state.body_v_s = checkpoint['body_v_s'].clone()
             self.actions = checkpoint['actions'].clone()
             self.progress_buf = checkpoint['progress_buf'].clone()
             self.obs_buf = checkpoint['obs_buf'].clone()
+            self.reference_frame = checkpoint['reference_frame'].clone()
+            self.reference_pos_offset = checkpoint['reference_pos_offset'].clone()
 
     def initialize_trajectory(self):
         """
@@ -440,12 +538,20 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         return self.obs_buf
 
     def get_checkpoint(self):
+        """
+        Get a checkpoint of the current state.
+        """
         checkpoint = {}
         checkpoint['joint_q'] = self.state.joint_q.clone()
         checkpoint['joint_qd'] = self.state.joint_qd.clone()
+        checkpoint['body_X_sc'] = self.state.body_X_sc.clone()
+        checkpoint['body_X_sm'] = self.state.body_X_sm.clone()
+        checkpoint['body_v_s'] = self.state.body_v_s.clone()
         checkpoint['actions'] = self.actions.clone()
         checkpoint['progress_buf'] = self.progress_buf.clone()
         checkpoint['obs_buf'] = self.obs_buf.clone()
+        checkpoint['reference_frame'] = self.reference_frame.clone()
+        checkpoint['reference_pos_offset'] = self.reference_pos_offset.clone()
 
         return checkpoint
 
@@ -458,21 +564,28 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         root_transform = self.state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
         root_pos = root_transform[:, 0:3]
         root_rot = root_transform[:, 3:7]
-        torso_pos = self.state.body_X_sc.view(self.num_envs, -1, 7)[:, 13, 0:3]
-        torso_rot = self.state.body_X_sc.view(self.num_envs, -1, 7)[:, 12, 3:7]
+
+        root_pos_xz = root_pos.clone()
+        root_pos_xz[:, 1] = 0.0
 
         # DeepMimic states (observations): each link's position and rotation relative to the root joint, phase of the motion
         # 1. compute relative body X_sc
-        relative_body_X_sc = tu.to_local_frame_spatial(self.state.body_X_sc.view(self.num_envs, -1, 7).clone(), root_transform)
+        body_X_sc = self.state.body_X_sc.view(self.num_envs, -1, 7)
+        body_X_sc_local = body_X_sc.clone()
+        body_X_sc_local[:, :, 0:3] = body_X_sc[:, :, 0:3] - root_pos_xz.unsqueeze(1).repeat(1, body_X_sc.shape[1], 1)
     
         # 2. compute phase of the motion
         progress_time = torch.clamp((self.progress_buf + self.offset_buf) * self.dt, min=0.0)
         max_time = self.reference_frame_time * self.reference_frame_count
         phase = ((progress_time + self.start_frame_offset * self.dt) / max_time) % 1.0
 
-        # 3. calculate the center of mass position, expressed in the local frame
+        # 3. calculate the center of mass position
         com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.state.body_X_sm.view(self.num_envs, -1, 7))
-        com_pos_local = tu.to_local_frame_pos(com_pos.view(self.num_envs, 1, 3), root_transform)
+        com_pos_local = com_pos - root_pos_xz
+
+        # calculate distance to reference com pos
+        ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
+        com_pos_diff = com_pos - ref_com_pos
         
         lin_vel = self.state.joint_qd.view(self.num_envs, -1)[:, 3:6]
         ang_vel = self.state.joint_qd.view(self.num_envs, -1)[:, 0:3]
@@ -484,131 +597,135 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         target_dirs = tu.normalize(to_target)
 
-        up_vec = tu.quat_rotate(torso_rot, self.basis_vec1)
-        heading_vec = tu.quat_rotate(torso_rot, self.basis_vec0)
-        # print(f'upness: {up_vec[:, 1:2]}, headingness: {(heading_vec * target_dirs).sum(dim=-1).unsqueeze(-1)}')
+        up_vec = tu.quat_rotate(root_rot, self.basis_vec1)
+        heading_vec = tu.quat_rotate(root_rot, self.basis_vec0)
+
+        root_rot_ortho6d = tu.quat_to_ortho6d(root_rot)
+        body_X_sc_local_translate = body_X_sc_local[:, :, 0:3].view(-1, 3)
+        body_X_sc_local_rotate = body_X_sc_local[:, :, 3:7].view(-1, 4)
+        body_X_sc_local_ortho6d = tu.quat_to_ortho6d(body_X_sc_local_rotate)
+        body_X_sc_local_ortho6d_translate = torch.cat([body_X_sc_local_translate, body_X_sc_local_ortho6d], dim=-1)
 
         # TODO: check if we can add phase (which is not differentiable) in observations
         self.obs_buf = torch.cat([
-            root_pos.view(self.num_envs, -1), # 0:3
-            root_rot.view(self.num_envs, -1), # 3:7
-            torso_pos.view(self.num_envs, -1), # 7:10
-            torso_rot.view(self.num_envs, -1), # 10:14
-            com_pos_local.view(self.num_envs, -1), # 14:17
-            lin_vel.view(self.num_envs, -1), # 17:20
-            ang_vel.view(self.num_envs, -1), # 20:23
-            up_vec[:, 1:2],  # 23:24
-            (heading_vec * target_dirs).sum(dim=-1).unsqueeze(-1), # 24:25
-            relative_body_X_sc.view(self.num_envs, -1),
-            phase.view(self.num_envs, 1),
+            root_pos[:, 1:2].view(self.num_envs, -1), # 0:1
+            root_rot_ortho6d.view(self.num_envs, -1), # 1:7
+            com_pos_local.view(self.num_envs, -1), # 7:10
+            lin_vel.view(self.num_envs, -1), # 10:13
+            ang_vel.view(self.num_envs, -1), # 13:16
+            up_vec[:, 1:2],  # 16:17
+            (heading_vec * target_dirs).sum(dim=-1).unsqueeze(-1), # 17:18
+            com_pos_diff.view(self.num_envs, -1), # 18:21
+            body_X_sc_local_ortho6d_translate.view(self.num_envs, -1), # 21:228
+            self.joint_vel_obs_scaling * self.state.body_v_s.view(self.num_envs, -1), # 228:366
+            phase.view(self.num_envs, 1), # 366:367
         ], dim=-1)
 
+    root_height_range = range(0, 1)
+    root_rot_range = range(1, 7)
+    com_pos_range = range(7, 10)
+    lin_vel_range = range(10, 13)
+    ang_vel_range = range(13, 16)
+    up_vec_range = range(16, 17)
+    heading_vec_range = range(17, 18)
+    com_pos_diff_range = range(18, 21)
+    body_X_sc_local_range = range(21, 228)
+    joint_vel_range = range(228, 366)
+    phase_range = range(366, 367)
+
     def calculateReward(self):
-        reward_type = 'deepmimic'
-        if reward_type == 'deepmimic':
-            # DeepMimic reward: pose reward + velocity reward + end-effector reward + center-of-mass reward
-            w_p = 0.65
-            w_v = 0.1
-            w_e = 0.15
-            w_c = 0.1
+        # DeepMimic reward: pose reward + velocity reward + end-effector reward + center-of-mass reward
+        w_p = 0.65
+        w_v = 0.1
+        w_e = 0.15
+        w_c = 0.1
 
-            # relative body X_sc for reference state
-            relative_body_X_sc = self.obs_buf[:, 25:-1].view(self.num_envs, -1, 7)
-            ref_root_transform = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
-            ref_relative_body_X_sc = tu.to_local_frame_spatial(self.reference_state.body_X_sc.view(self.num_envs, -1, 7).clone(), ref_root_transform)
-            
-            body_pos_diff = relative_body_X_sc[:, :, 0:3] - ref_relative_body_X_sc[:, :, 0:3]
+        # body transforms and velocities
+        body_X_sc = self.state.body_X_sc.view(self.num_envs, -1, 7)
+        body_v_s = self.state.body_v_s.view(self.num_envs, -1, 6)
+        ref_body_X_sc = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)
+        ref_body_v_s = self.reference_state.body_v_s.view(self.num_envs, -1, 6)
 
-            # pos reward: exp(-2 * sum(body quat, ref body quat diff **2))
-            body_quat = relative_body_X_sc[:, :, 3:7]
-            ref_body_quat = ref_relative_body_X_sc[:, :, 3:7]
-            body_quat_diff = tu.quat_diff(body_quat, ref_body_quat)
-            pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
+        # pos reward: exp(-2 * sum(body quat, ref body quat diff **2))
+        body_ortho6d = self.obs_buf[:, self.body_X_sc_local_range].view(self.num_envs, -1, 9)[:, :, 3:9]
+        ref_body_ortho6d = tu.quat_to_ortho6d(ref_body_X_sc[:, :, 3:7])
+        body_ortho6d_diff = tu.ortho6d_diff(body_ortho6d, ref_body_ortho6d)
+        # pos_reward = torch.exp(-2 * torch.sum(torch.sum(body_quat_diff ** 2, dim=-1), dim=-1))
+        rot_reward = -2 * torch.sum(torch.sum(body_ortho6d_diff ** 2, dim=-1), dim=-1)
+        
+        body_pos = body_X_sc[:, :, 0:3]
+        ref_body_pos = ref_body_X_sc[:, :, 0:3]
+        body_pos_diff = body_pos - ref_body_pos
+        pos_reward = -1.5 * torch.sum(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1)
 
-            # velocity reward: exp(-0.1 * sum(body w, ref body w diff **2))
-            body_w_diff = self.state.body_v_s.view(self.num_envs, -1, 6)[:, :, 0:3] - self.reference_state.body_v_s.view(self.num_envs, -1, 6)[:, :, 0:3]
-            vel_reward = torch.exp(-0.1 * torch.sum(torch.sum(body_w_diff ** 2, dim=-1), dim=-1))
+        # velocity reward: exp(-0.1 * sum(body w, ref body w diff **2))
+        # body_w_diff = body_v_s[:, :, 0:3] - ref_body_v_s[:, :, 0:3]
+        # vel_reward = torch.exp(-0.1 * torch.sum(torch.sum(body_w_diff ** 2, dim=-1), dim=-1))
 
-            # end-effector reward: exp(-40 * sum(end-effector pos, ref end-effector pos diff **2))
-            end_effector_pos = relative_body_X_sc[:, self.end_effector_indices, 0:3]
-            ref_end_effector_pos = ref_relative_body_X_sc[:, self.end_effector_indices, 0:3]
-            end_effector_pos_diff = end_effector_pos - ref_end_effector_pos
-            end_effector_reward = torch.exp(-40 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
+        # end-effector reward: exp(-40 * sum(end-effector pos, ref end-effector pos diff **2))
+        # let's compare end-effector pos in local frame
+        end_effector_pos = body_X_sc[:, self.end_effector_indices, 0:3]
+        ref_end_effector_pos = ref_body_X_sc[:, self.end_effector_indices, 0:3]
+        end_effector_pos_diff = end_effector_pos - ref_end_effector_pos
+        # strong penalty for xz-plane diff
+        end_effector_pos_diff[:, :, 0] *= 2.5
+        end_effector_pos_diff[:, :, 2] *= 2.5
+        # end_effector_reward = torch.exp(-5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
+        end_effector_reward = -5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1)
 
-            # center-of-mass reward: exp(-10 * sum(com pos, ref com pos diff **2))
-            com_pos_local = self.obs_buf[:, 14:17]
-            ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
-            ref_com_pos_local = tu.to_local_frame_pos(ref_com_pos.view(self.num_envs, 1, 3), ref_root_transform).view(self.num_envs, -1)
-            com_pos_diff = com_pos_local - ref_com_pos_local
-            com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
+        # center-of-mass reward: exp(-10 * sum(com pos, ref com pos diff **2))
+        # com_pos = self.obs_buf[:, self.com_pos_range]
+        # ref_com_pos = tu.get_center_of_mass(self.model.body_I_m.view(self.num_envs, -1, 6, 6), self.reference_state.body_X_sm.view(self.num_envs, -1, 7))
+        com_pos_diff = self.obs_buf[:, self.com_pos_diff_range]
+        # strong penalty for xz-plane diff
+        com_pos_diff[:, 0] *= 2.5
+        com_pos_diff[:, 2] *= 2.5
+        # com_reward = torch.exp(-10 * torch.sum(com_pos_diff ** 2, dim=-1))
+        com_reward = -10 * torch.sum(com_pos_diff ** 2, dim=-1)
 
-            imitation_reward = w_p * pos_reward + w_v * vel_reward + w_e * end_effector_reward + w_c * com_reward
-
-        elif reward_type == 'diffmimic':
-            # diffMimic reward: pos + rot + vel + ang
-            w_pos = 1
-            w_rot = 0.5
-            w_vel = 0.01
-            w_ang = 0.01
-
-            # relative body X_sc for reference state
-            relative_body_X_sc = self.obs_buf[:, 25:-1].view(self.num_envs, -1, 7)
-            ref_root_transform = self.reference_state.body_X_sc.view(self.num_envs, -1, 7)[:, 0, :].squeeze(1)
-            ref_relative_body_X_sc = tu.to_local_frame_spatial(self.reference_state.body_X_sc.view(self.num_envs, -1, 7).clone(), ref_root_transform)
-
-            body_pos_diff = relative_body_X_sc[:, :, 0:3] - ref_relative_body_X_sc[:, :, 0:3]
-            pos_reward = -torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1)
-
-            body_rot_diff = tu.quat_diff(relative_body_X_sc[:, :, 3:7], ref_relative_body_X_sc[:, :, 3:7])
-            rot_reward = -torch.mean(torch.sum(body_rot_diff ** 2, dim=-1), dim=-1)
-
-            body_vel_diff = self.state.body_v_s.view(self.num_envs, -1, 6)[:, :, 3:6] - self.reference_state.body_v_s.view(self.num_envs, -1, 6)[:, :, 3:6]
-            vel_reward = -torch.mean(torch.sum(body_vel_diff ** 2, dim=-1), dim=-1)
-
-            body_ang_vel_diff = self.state.body_v_s.view(self.num_envs, -1, 6)[:, :, 0:3] - self.reference_state.body_v_s.view(self.num_envs, -1, 6)[:, :, 0:3]
-            ang_vel_reward = -torch.mean(torch.sum(body_ang_vel_diff ** 2, dim=-1), dim=-1)
-
-            imitation_reward = w_pos * pos_reward + w_rot * rot_reward + w_vel * vel_reward + w_ang * ang_vel_reward
-
-        else:
-            imitation_reward = 0.0
+        # imitation_reward = w_p * pos_reward + w_v * vel_reward + w_e * end_effector_reward + w_c * com_reward
+        # instead, use multiplied reward
+        imitation_reward = rot_reward + end_effector_reward + com_reward + 1.0
+        # imitation_reward = torch.exp(rot_reward + end_effector_reward + com_reward)
+        # live_reward = torch.ones_like(imitation_reward) * 0.3
 
         # goal reward
-        up_reward = 0.5 * self.obs_buf[:, 23]
-        heading_reward = 0.5 * self.obs_buf[:, 24]
+        # up_reward = 0.1 * self.obs_buf[:, 17]
+        # heading_reward = 1 * self.obs_buf[:, 18]
 
-        height_diff = self.obs_buf[:, 8] - self.termination_height
-        height_reward = torch.clip(height_diff, -1.0, self.termination_tolerance)
-        height_reward = torch.where(height_reward < 0.0, -200.0 * height_reward * height_reward,
-                                    height_reward)  # JIE: not smooth
-        height_reward = torch.where(height_reward > 0.0, self.height_rew_scale * height_reward, height_reward)
+        # height_diff = self.obs_buf[:, 1] - self.termination_height
+        # height_reward = torch.clip(height_diff, -1.0, self.termination_tolerance)
+        # height_reward = torch.where(height_reward < 0.0, -200.0 * height_reward * height_reward,
+        #                             height_reward)  # JIE: not smooth
+        # height_reward = torch.where(height_reward > 0.0, self.height_rew_scale * height_reward, height_reward)
 
-        act_penalty = torch.sum(torch.abs(self.actions),
-                                dim=-1) * self.action_penalty  # torch.sum(self.actions ** 2, dim = -1) * self.action_penalty
+        # act_penalty = torch.sum(torch.abs(self.actions),
+        #                         dim=-1) * self.action_penalty  # torch.sum(self.actions ** 2, dim = -1) * self.action_penalty
 
-        # get z-axis velocity
-        progress_reward = self.obs_buf[:, 19]
-        # walking: speed is limited to 0.75m/s, so clip the reward
-        progress_reward = torch.where(progress_reward > 0.75, 0.75, progress_reward)
+        # # get z-axis velocity
+        # progress_reward = self.obs_buf[:, 12]
+        # # walking: speed is limited to 0.75m/s, so clip the reward
+        # progress_reward = torch.where(progress_reward > 0.75, 0.75, progress_reward)
 
-        goal_reward = up_reward + heading_reward + height_reward + progress_reward
+        # goal_reward = height_reward + progress_reward
 
-        w_g = 0.05
-        w_i = 0.95
+        # w_g = 0.05
+        # w_i = 0.95
 
         # print the mean reward
         # print(f"mean imitation reward: {torch.mean(imitation_reward).item()}, mean goal reward: {torch.mean(goal_reward).item()}")
 
-        self.rew_buf = w_g * goal_reward + w_i * imitation_reward
+        self.rew_buf = imitation_reward
 
         # reset agents (early termination)
-        self.reset_buf = torch.where(self.obs_buf[:, 8] < self.termination_height, torch.ones_like(self.reset_buf),
-                                        self.reset_buf)
+        self.reset_buf = torch.where(self.obs_buf[:, self.root_height_range].squeeze(-1) < self.termination_height, torch.ones_like(self.reset_buf), self.reset_buf)
         
         # # if pos reward is less than -1, reset
         # body_pos_diff = relative_body_X_sc[:, :, 0:3] - ref_relative_body_X_sc[:, :, 0:3]
         # self.reset_buf = torch.where(torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1) > 0.2, torch.ones_like(self.reset_buf),
         #                                 self.reset_buf)
+        # if imitation reward is less than 0.1, reset
+        self.reset_buf = torch.where(imitation_reward < -1.3, torch.ones_like(self.reset_buf), self.reset_buf)
         
         # normal termination
         self.reset_buf = torch.where(self.progress_buf > self.episode_length - 1, torch.ones_like(self.reset_buf),
@@ -633,19 +750,37 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         self.rew_buf[invalid_masks] = 0.0
 
+    def get_frame_indices(self):
+        return torch.round((torch.clamp(self.progress_buf + self.offset_buf, min=0) + self.start_frame_offset) * self.dt / self.reference_frame_time).long() % self.reference_frame_count
+
     def update_reference_model(self):
         """
         Update the reference model's state from the phase of the motion.
         """
-        frame_index = torch.round((torch.clamp(self.progress_buf + self.offset_buf, min=0) + self.start_frame_offset) * self.dt / self.reference_frame_time).long() % self.reference_frame_count
+        frame_indices = self.get_frame_indices()
         next_state = self.reference_model.state()
 
-        # update joint_q and joint_qd
-        next_state.joint_q[:] = self.reference_joint_q[frame_index, :].view(-1)
-        next_state.joint_qd[:] = self.reference_joint_qd[frame_index, :].view(-1)
+        # if new frame index is less than the previous frame index, it means the reference model has looped
+        loop_indices = torch.nonzero(frame_indices < self.reference_frame).squeeze(-1)
+        # if looped, update the offset to connect the loop
+        diff = self.reference_joint_q[self.reference_frame[loop_indices], :3] - self.reference_joint_q[frame_indices[loop_indices], :3]
+        # prevent height error
+        diff[:, 1] = 0.0
+        self.reference_pos_offset[loop_indices] += diff
+        self.reference_frame = frame_indices
 
-        # rotate the torso
-        # next_state.joint_q.view(self.num_envs, -1)[:, 3:7] = tu.quat_from_angle_axis(torch.tensor([math.pi * 0.5]).repeat(self.num_envs).to(self.device), self.y_unit_tensor)
+        # update joint_q and joint_qd
+        next_state.joint_q.view(self.num_envs, -1)[:, :] = self.reference_joint_q[frame_indices, :]
+        next_state.joint_qd.view(self.num_envs, -1)[:, :] = self.reference_joint_qd[frame_indices, :]
+        
+        # apply the offset to the reference model
+        next_state.joint_q.view(self.num_envs, -1)[:, :3] += self.reference_pos_offset
+        # linear velocity fix
+        next_state.joint_qd.view(self.num_envs, -1)[:, 3:6] -= torch.cross(
+            next_state.joint_qd.view(self.num_envs, -1)[:, 0:3],
+            self.reference_pos_offset,
+            dim=-1
+        )
 
         # perform forward kinematics
         body_X_sc, body_X_sm = eval_rigid_fk_grad(self.reference_model, next_state.joint_q)
@@ -660,7 +795,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         
         self.reference_state = next_state
 
-    def copy_ref_pos_to_state(self, env_ids=None):
+    def copy_ref_pos_to_state(self, env_ids=None, perform_forward_kinematics=False):
         """
         Copy the reference motion to the state.
         """
@@ -670,14 +805,27 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.state.joint_q = self.state.joint_q.clone()
         self.state.joint_qd = self.state.joint_qd.clone()
 
-        frame_index = torch.round((torch.clamp(self.progress_buf + self.offset_buf, min=0) + self.start_frame_offset) * self.dt / self.reference_frame_time).long() % self.reference_frame_count
+        frame_index = self.get_frame_indices()
         # masked values are 0, so we don't need to use mask to select valid values
         self.state.joint_q.view(self.num_envs, -1)[env_ids, :] = self.reference_joint_q[frame_index[env_ids], :]
         self.state.joint_qd.view(self.num_envs, -1)[env_ids, :] = self.reference_joint_qd[frame_index[env_ids], :]
 
         # reset position
-        self.state.joint_q.view(self.num_envs, -1)[env_ids, 0] = 0.0
-        # ground height correction
-        self.state.joint_q.view(self.num_envs, -1)[env_ids, 1] = 1.0 - 0.05
-        self.state.joint_q.view(self.num_envs, -1)[env_ids, 2] = 0.0
-        # self.state.joint_q.view(self.num_envs, -1)[env_ids, 3:7] = tu.quat_from_angle_axis(torch.tensor([math.pi * 0.5]).repeat(len(env_ids)).to(self.device), torch.tensor([0.0, 1.0, 0.0]).view(1, -1).repeat(len(env_ids), 1).to(self.device))
+        self.state.joint_q.view(self.num_envs, -1)[env_ids, :3] += self.start_reference_pos_offset[env_ids]
+        # linear velocity fix
+        self.state.joint_qd.view(self.num_envs, -1)[env_ids, 3:6] -= torch.cross(
+            self.state.joint_qd.view(self.num_envs, -1)[env_ids, 0:3],
+            self.start_reference_pos_offset[env_ids],
+            dim=-1
+        )
+
+        if perform_forward_kinematics:
+            body_X_sc, body_X_sm = eval_rigid_fk_grad(self.model, self.state.joint_q)
+            self.state.body_X_sc = body_X_sc
+            self.state.body_X_sm = body_X_sm
+            joint_S_s, body_I_s, body_v_s, body_f_s, body_a_s = eval_rigid_id_grad(self.model, self.state.joint_q, self.state.joint_qd, body_X_sc, body_X_sm)
+            self.state.joint_S_s = joint_S_s
+            self.state.body_I_s = body_I_s
+            self.state.body_v_s = body_v_s
+            self.state.body_f_s = body_f_s
+            self.state.body_a_s = body_a_s

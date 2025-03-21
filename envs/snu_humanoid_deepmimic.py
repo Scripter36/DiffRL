@@ -40,9 +40,6 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.filter = { "Pelvis", "FemurR", "TibiaR", "TalusR", "FootThumbR", "FootPinkyR", "FemurL", "TibiaL", "TalusL", "FootThumbL", "FootPinkyL"}
 
         self.skeletons = []
-        self.muscle_strengths = []
-
-        self.mtu_actuations = True 
 
         self.inv_control_freq = 1
 
@@ -187,6 +184,9 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
         if (self.model.ground):
             self.model.collide(self.state)
+
+        # copy the reference motion to the state
+        self.copy_ref_pos_to_state()
 
     def render(self, mode='human', render_env_ids=None):
         """
