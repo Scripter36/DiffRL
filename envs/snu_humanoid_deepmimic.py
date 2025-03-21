@@ -164,7 +164,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
         # load reference motion
         self.reference_frame_time, self.reference_frame_count, self.reference_joint_q, self.reference_joint_q_mask, self.reference_joint_qd = \
-            lu.load_bvh(os.path.join(self.asset_folder, "motion/walk.bvh"), self.skeletons[0].bvh_map, self.model)
+            lu.load_bvh(os.path.join(self.asset_folder, "motion/run.bvh"), self.skeletons[0].bvh_map, self.model)
 
         # end effector indices
         self.end_effector_indices = [4, 9] # FootThumbR, FootThumbL
@@ -184,6 +184,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.start_pos = torch.tensor((0.0, start_height, 0.0), dtype=torch.float32, device=self.device)
         self.reference_pos_offset = self.start_pos.unsqueeze(0).repeat(self.num_envs, 1) - self.reference_joint_q[0, 0:3]
         self.start_reference_pos_offset = self.reference_pos_offset.clone()
+        self.start_reference_pos_offset += torch.tensor((2.0, 0.0, 0.0), dtype=torch.float32, device=self.device)
 
         if (self.model.ground):
             self.model.collide(self.state)
@@ -215,6 +216,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                 obs = frame['obs'][render_env_ids]  # Only get observations for selected environments
                 reference_state = frame['reference_state']
                 muscle_activation = frame['muscle_activation']
+                muscle_l_m_norm = frame['muscle_l_m_norm']
                 
                 # Render this frame for selected environments
                 muscle_start = 0
@@ -247,11 +249,12 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
                         # Get muscle activation for this environment
                         env_muscle_activation = muscle_activation.view(self.num_envs, -1)[i, muscle_start + m]
+                        env_muscle_l_m_norm = muscle_l_m_norm.view(self.num_envs, -1)[i, muscle_start + m]
+                        activation_color = env_muscle_activation.item()
+                        length_color = max(min(1.0, env_muscle_l_m_norm.item() - 1.0), 0.0)
                         
                         self.renderer.add_line_strip(points, name=s.muscles[m].name + str(skel_index),
-                                                        radius=0.0075, color=(
-                                env_muscle_activation.item(), 0.2,
-                                0.5),
+                                                        radius=0.0075, color=(activation_color, length_color, 0.5),
                                                         time=render_time)
 
                     muscle_start += len(s.muscles)
@@ -330,7 +333,8 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
             'state': self.model.state(),
             'obs': self.obs_buf.clone(),
             'reference_state': self.reference_model.state(),
-            'muscle_activation': self.model.muscle_activation.clone()
+            'muscle_activation': self.model.muscle_activation.clone(),
+            'muscle_l_m_norm': self.model.muscle_l_m_norm.clone()
         }
         
         # Copy values from current state to saved state
@@ -391,6 +395,10 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
             self.state = self.integrator.forward(self.model, self.state, self.sim_dt, self.sim_substeps,
                                                  self.MM_caching_frequency)
             self.sim_time += self.sim_dt
+
+        # increment the progress buffer and the number of frames
+        self.progress_buf += 1
+        self.num_frames += 1
         
         # update the reference model
         with torch.no_grad():
@@ -403,9 +411,6 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
             self.state.joint_qd.register_hook(create_hook(f'joint_qd_{self.num_frames}_after_step'))
 
         self.reset_buf = torch.zeros_like(self.reset_buf)
-
-        self.progress_buf += 1
-        self.num_frames += 1
 
         self.calculateObservations()
         self.calculateReward()
@@ -773,6 +778,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         next_state.joint_qd.view(self.num_envs, -1)[:, 3:6] -= torch.cross(
             next_state.joint_qd.view(self.num_envs, -1)[:, 0:3],
             self.reference_pos_offset,
+            dim=-1
         )
 
         # perform forward kinematics
@@ -809,6 +815,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.state.joint_qd.view(self.num_envs, -1)[env_ids, 3:6] -= torch.cross(
             self.state.joint_qd.view(self.num_envs, -1)[env_ids, 0:3],
             self.start_reference_pos_offset[env_ids],
+            dim=-1
         )
 
         if perform_forward_kinematics:

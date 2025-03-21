@@ -1341,7 +1341,8 @@ def eval_muscles(
     muscle_length: df.tensor(float),
     muscle_activation: df.tensor(float),
     # output
-    body_f_s: df.tensor(df.spatial_vector)):
+    body_f_s: df.tensor(df.spatial_vector),
+    muscle_l_m_norm: df.tensor(float)):
 
     tid = df.tid()
 
@@ -1387,6 +1388,10 @@ def eval_muscles(
     # 2. calculate normalized muscle length
     l_m = (l_mt / l_mt0) - l_t0
     l_m_norm = l_m / l_m0
+
+    # if l_m_norm > 1.0:
+    #     df.printf("muscle %d: l_mt0 %f, l_mt %f, l_m_norm %f\n", tid, l_mt0, l_mt, l_m_norm)
+    df.store(muscle_l_m_norm, tid, l_m_norm)
 
     # 3. calculate forces
     f_a = g_al(l_m_norm, 0.45)
@@ -2570,7 +2575,8 @@ class SemiImplicitIntegrator:
                         model.muscle_activation
                     ],
                     outputs=[
-                        state_out.body_f_s
+                        state_out.body_f_s,
+                        model.muscle_l_m_norm
                     ],
                     adapter=model.adapter,
                     preserve_output=True)

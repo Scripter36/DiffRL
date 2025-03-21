@@ -1739,6 +1739,7 @@ class ModelBuilder:
         m.muscle_activation = torch.tensor(self.muscle_activation, dtype=torch.float32, device=adapter)
         # length of muscle at rest position (l_mt0)
         m.muscle_length = torch.ones(muscle_count, dtype=torch.float32, device=adapter)
+        m.muscle_l_m_norm = torch.zeros(muscle_count, dtype=torch.float32, device=adapter)
 
         #--------------------------------------
         # articulations
