@@ -184,7 +184,6 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         self.start_pos = torch.tensor((0.0, start_height, 0.0), dtype=torch.float32, device=self.device)
         self.reference_pos_offset = self.start_pos.unsqueeze(0).repeat(self.num_envs, 1) - self.reference_joint_q[0, 0:3]
         self.start_reference_pos_offset = self.reference_pos_offset.clone()
-        self.start_reference_pos_offset += torch.tensor((2.0, 0.0, 0.0), dtype=torch.float32, device=self.device)
 
         if (self.model.ground):
             self.model.collide(self.state)
@@ -216,7 +215,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
                 obs = frame['obs'][render_env_ids]  # Only get observations for selected environments
                 reference_state = frame['reference_state']
                 muscle_activation = frame['muscle_activation']
-                muscle_l_m_norm = frame['muscle_l_m_norm']
+                # muscle_l_m_norm = frame['muscle_l_m_norm']
                 
                 # Render this frame for selected environments
                 muscle_start = 0
@@ -249,9 +248,10 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
 
                         # Get muscle activation for this environment
                         env_muscle_activation = muscle_activation.view(self.num_envs, -1)[i, muscle_start + m]
-                        env_muscle_l_m_norm = muscle_l_m_norm.view(self.num_envs, -1)[i, muscle_start + m]
+                        # env_muscle_l_m_norm = muscle_l_m_norm.view(self.num_envs, -1)[i, muscle_start + m]
                         activation_color = env_muscle_activation.item()
-                        length_color = max(min(1.0, env_muscle_l_m_norm.item() - 1.0), 0.0)
+                        # length_color = max(min(1.0, env_muscle_l_m_norm.item() - 1.0), 0.0)
+                        length_color = 0.2
                         
                         self.renderer.add_line_strip(points, name=s.muscles[m].name + str(skel_index),
                                                         radius=0.0075, color=(activation_color, length_color, 0.5),
@@ -333,8 +333,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
             'state': self.model.state(),
             'obs': self.obs_buf.clone(),
             'reference_state': self.reference_model.state(),
-            'muscle_activation': self.model.muscle_activation.clone(),
-            'muscle_l_m_norm': self.model.muscle_l_m_norm.clone()
+            'muscle_activation': self.model.muscle_activation.clone()
         }
         
         # Copy values from current state to saved state
