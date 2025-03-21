@@ -455,6 +455,10 @@ inline CUDA_CALLABLE void print(spatial_matrix m)
            m.data[5][0], m.data[5][1], m.data[5][2],  m.data[5][3], m.data[5][4], m.data[5][5]);
 }
 
+inline CUDA_CALLABLE void print(const char* s)
+{
+    printf("%s\n", s);
+}
 
 inline CUDA_CALLABLE void adj_print(int i, int& adj_i) { printf("%d adj: %d\n", i, adj_i); }
 inline CUDA_CALLABLE void adj_print(float i, float& adj_i) { printf("%f adj: %f\n", i, adj_i); }
@@ -465,5 +469,6 @@ inline CUDA_CALLABLE void adj_print(mat33 m, mat33& adj_m) { }
 inline CUDA_CALLABLE void adj_print(spatial_transform t, spatial_transform& adj_t) {}
 inline CUDA_CALLABLE void adj_print(spatial_vector t, spatial_vector& adj_t) {}
 inline CUDA_CALLABLE void adj_print(spatial_matrix t, spatial_matrix& adj_t) {}
+inline CUDA_CALLABLE void adj_print(const char* s, char* adj_s) { }
 
 } // namespace df

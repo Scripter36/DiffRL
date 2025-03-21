@@ -1312,7 +1312,7 @@ def cache_muscle_length(
     if m_len > 7:
         l_mt = l_mt + compute_muscle_length(m_start + 7, muscle_links, muscle_points, body_X_s)
     if m_len > 8:
-        print(0-123)
+        print("Cannot handle more than 8 segments")
 
     df.store(muscle_length, tid, l_mt)
 
@@ -1382,7 +1382,7 @@ def eval_muscles(
     if m_len > 7:
         l_mt = l_mt + compute_muscle_length(m_start + 7, muscle_links, muscle_points, body_X_s)
     if m_len > 8:
-        print(0-123)
+        print("Cannot handle more than 8 segments")
 
     # 2. calculate normalized muscle length
     l_m = (l_mt / l_mt0) - l_t0

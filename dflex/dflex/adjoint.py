@@ -638,6 +638,11 @@ class PrintFunc:
     def value_type(args):
         return None
 
+@builtin("printf")
+class PrintfFunc:
+    @staticmethod
+    def value_type(args):
+        return None
 
 class Var:
     def __init__(adj, label, type, requires_grad=False, constant=None):
@@ -658,8 +663,16 @@ class Var:
             return str(self.type.type.__name__) + "*"
         elif self.type == float3:
             return "df::" + str(self.type.__name__)
+        elif self.type == str:
+            return "char*"
         else:
             return str(self.type.__name__)
+        
+    def get_constant(self):
+        if self.type == str:
+            return f'"{repr(self.constant)[1:-1]}"'
+        else:
+            return self.constant
 
 
 #--------------------
@@ -808,12 +821,17 @@ class Adjoint:
         # expression (zero output), e.g.: tid()
         if (func.value_type(inputs) == None):
 
-            forward_call = prefix + "{}({});".format(func.key, adj.format_args("var_", inputs))
+            # quick and dirty fix for printf
+            if func.key != 'printf':
+                forward_call = prefix + "{}({});".format(func.key, adj.format_args("var_", inputs))
+            else:
+                forward_call = "{}({});".format(func.key, adj.format_args("var_", inputs))
             adj.add_forward(forward_call)
 
             if (len(inputs)):
-                reverse_call = prefix + "{}({}, {});".format("adj_" + func.key, adj.format_args("var_", inputs), adj.format_args("adj_", inputs))
-                adj.add_reverse(reverse_call)
+                if func.key != 'printf':
+                    reverse_call = prefix + "{}({}, {});".format("adj_" + func.key, adj.format_args("var_", inputs), adj.format_args("adj_", inputs))
+                    adj.add_reverse(reverse_call)
 
             return None
 
@@ -827,7 +845,7 @@ class Adjoint:
 
             if (len(inputs)):
                 reverse_call = prefix + "{}({}, {}, {});".format(
-                    "adj_" + func.key, adj.format_args("var_", inputs), adj.format_args("adj_", inputs), adj.format_args("adj_", [output]))
+                        "adj_" + func.key, adj.format_args("var_", inputs), adj.format_args("adj_", inputs), adj.format_args("adj_", [output]))
                 adj.add_reverse(reverse_call)
 
             return output
@@ -1357,7 +1375,7 @@ def codegen_func_forward(adj, func_type='kernel', device='cpu'):
         if var.constant == None:
             s += "    " + var.ctype() + " var_" + str(var.label) + ";\n"
         else:
-            s += "    const " + var.ctype() + " var_" + str(var.label) + " = " + str(var.constant) + ";\n"
+            s += "    const " + var.ctype() + " var_" + str(var.label) + " = " + str(var.get_constant()) + ";\n"
 
 
     # forward pass
@@ -1435,7 +1453,7 @@ def codegen_func_reverse(adj, func_type='kernel', device='cpu'):
         if var.constant == None:
             s += "    " + var.ctype() + " var_" + str(var.label) + ";\n"
         else:
-            s += "    const " + var.ctype() + " var_" + str(var.label) + " = " + str(var.constant) + ";\n"
+            s += "    const " + var.ctype() + " var_" + str(var.label) + " = " + str(var.get_constant()) + ";\n"
 
     # dual vars
     s += "    //---------\n"
