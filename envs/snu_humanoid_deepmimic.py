@@ -654,7 +654,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         body_pos = body_X_sc[:, :, 0:3]
         ref_body_pos = ref_body_X_sc[:, :, 0:3]
         body_pos_diff = body_pos - ref_body_pos
-        pos_reward = -1.5 * torch.sum(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1)
+        pos_reward = -16 * torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1)
 
         # velocity reward: exp(-0.1 * sum(body w, ref body w diff **2))
         # body_w_diff = body_v_s[:, :, 0:3] - ref_body_v_s[:, :, 0:3]
@@ -669,7 +669,7 @@ class SNUHumanoidDeepMimicEnv(DFlexEnv):
         end_effector_pos_diff[:, :, 0] *= 2.5
         end_effector_pos_diff[:, :, 2] *= 2.5
         # end_effector_reward = torch.exp(-5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
-        end_effector_reward = -5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1)
+        end_effector_reward = -10 * torch.mean(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1)
 
         # center-of-mass reward: exp(-10 * sum(com pos, ref com pos diff **2))
         # com_pos = self.obs_buf[:, self.com_pos_range]

@@ -70,7 +70,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         self.init_sim()
 
         # other parameters
-        self.termination_height = 0.74
+        self.termination_height = 0.46
         self.termination_tolerance = 0.05
         self.height_rew_scale = 4.0
         self.action_strength = 100.0
@@ -162,7 +162,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
 
         # load reference motion
         self.reference_frame_time, self.reference_frame_count, self.reference_joint_q, self.reference_joint_q_mask, self.reference_joint_qd = \
-            lu.load_bvh(os.path.join(self.asset_folder, "motion/walk.bvh"), self.skeletons[0].bvh_map, self.model, self.dt)
+            lu.load_bvh(os.path.join(self.asset_folder, "motion/walk.bvh"), self.skeletons[0].bvh_map, self.model)
 
         # end effector indices
         self.end_effector_indices = [4, 9, 14, 18, 22] # FootThumbR, FootThumbL, Head, HandR, HandL
@@ -656,7 +656,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         body_pos = body_X_sc[:, :, 0:3]
         ref_body_pos = ref_body_X_sc[:, :, 0:3]
         body_pos_diff = body_pos - ref_body_pos
-        pos_reward = -1.5 * torch.sum(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1)
+        pos_reward = -16 * torch.mean(torch.sum(body_pos_diff ** 2, dim=-1), dim=-1)
 
         # velocity reward: exp(-0.1 * sum(body w, ref body w diff **2))
         # body_w_diff = body_v_s[:, :, 0:3] - ref_body_v_s[:, :, 0:3]
@@ -671,7 +671,7 @@ class SNUHumanoidFullDeepMimicEnv(DFlexEnv):
         end_effector_pos_diff[:, :, 0] *= 2.5
         end_effector_pos_diff[:, :, 2] *= 2.5
         # end_effector_reward = torch.exp(-5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1))
-        end_effector_reward = -5 * torch.sum(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1)
+        end_effector_reward = -10 * torch.mean(torch.sum(end_effector_pos_diff ** 2, dim=-1), dim=-1)
 
         # center-of-mass reward: exp(-10 * sum(com pos, ref com pos diff **2))
         # com_pos = self.obs_buf[:, self.com_pos_range]
